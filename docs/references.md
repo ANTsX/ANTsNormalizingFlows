@@ -1,3 +1,3 @@
 # API references
 
-::: normflows
+::: antsnormflows

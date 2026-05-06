@@ -6,9 +6,8 @@ Code partially taken from https://github.com/bayesiains/nsf
 import torch
 import unittest
 
-from normflows.flows.neural_spline import autoregressive
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.flows.neural_spline import autoregressive
+from tests.flows.flow_test import FlowTest
 
 class MaskedPiecewiseRationalQuadraticAutoregressiveFlowTest(FlowTest):
     def test_mprqas(self):

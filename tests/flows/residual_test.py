@@ -1,11 +1,10 @@
 import unittest
 import torch
 
-from normflows.flows import Residual
-from normflows.nets import LipschitzMLP, LipschitzCNN
-from normflows.utils.optim import update_lipschitz
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.flows import Residual
+from antsnormflows.nets import LipschitzMLP, LipschitzCNN
+from antsnormflows.utils.optim import update_lipschitz
+from tests.flows.flow_test import FlowTest
 
 class ResidualTest(FlowTest):
     def test_residual_mlp(self):

@@ -1,10 +1,9 @@
 import unittest
 import torch
 
-from normflows.flows.base import Reverse, Composite
-from normflows.flows.affine.coupling import AffineConstFlow
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.flows.base import Reverse, Composite
+from antsnormflows.flows.affine.coupling import AffineConstFlow
+from tests.flows.flow_test import FlowTest
 
 class BaseTest(FlowTest):
     def test_reverse(self):

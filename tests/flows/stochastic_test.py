@@ -4,11 +4,10 @@ import numpy as np
 
 from torch.distributions.multivariate_normal import MultivariateNormal
 
-from normflows.flows.stochastic import MetropolisHastings, \
+from antsnormflows.flows.stochastic import MetropolisHastings, \
     HamiltonianMonteCarlo
-from normflows.distributions.mh_proposal import DiagGaussianProposal
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.distributions.mh_proposal import DiagGaussianProposal
+from tests.flows.flow_test import FlowTest
 
 class StochasticTest(FlowTest):
     def test_metropolis_hastings(self):

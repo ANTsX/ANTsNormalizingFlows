@@ -2,20 +2,20 @@ import unittest
 import torch
 
 from torch.testing import assert_close
-from normflows import NormalizingFlow, ClassCondFlow, \
+from antsnormflows import NormalizingFlow, ClassCondFlow, \
     MultiscaleFlow, NormalizingFlowVAE, \
     ConditionalNormalizingFlow
-from normflows.flows import MaskedAffineFlow, \
+from antsnormflows.flows import MaskedAffineFlow, \
     GlowBlock2d, GlowBlock3d, Merge, \
     Squeeze2d, Squeeze3d, MaskedAffineAutoregressive, \
     AutoregressiveRationalQuadraticSpline
-from normflows.nets import MLP
-from normflows.distributions.base import DiagGaussian, \
+from antsnormflows.nets import MLP
+from antsnormflows.distributions.base import DiagGaussian, \
     ClassCondDiagGaussian
-from normflows.distributions.target import CircularGaussianMixture, \
+from antsnormflows.distributions.target import CircularGaussianMixture, \
     ConditionalDiagGaussian
-from normflows.distributions.encoder import NNDiagGaussian
-from normflows.distributions.decoder import NNDiagGaussianDecoder
+from antsnormflows.distributions.encoder import NNDiagGaussian
+from antsnormflows.distributions.decoder import NNDiagGaussianDecoder
 
 
 class CoreTest(unittest.TestCase):

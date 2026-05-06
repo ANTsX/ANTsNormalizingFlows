@@ -1,9 +1,8 @@
 import unittest
 import torch
 
-from normflows.flows import GlowBlock2d, GlowBlock3d
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.flows import GlowBlock2d, GlowBlock3d
+from tests.flows.flow_test import FlowTest
 
 class GlowTest(FlowTest):
     def test_glow(self):

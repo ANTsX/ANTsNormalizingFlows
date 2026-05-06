@@ -2,11 +2,11 @@ import unittest
 import torch
 import numpy as np
 
-from normflows.flows import CoupledRationalQuadraticSpline, \
+from antsnormflows.flows import CoupledRationalQuadraticSpline, \
     AutoregressiveRationalQuadraticSpline, \
     CircularCoupledRationalQuadraticSpline, \
     CircularAutoregressiveRationalQuadraticSpline
-from normflows.flows.flow_test import FlowTest
+from tests.flows.flow_test import FlowTest
 
 
 class NsfWrapperTest(FlowTest):

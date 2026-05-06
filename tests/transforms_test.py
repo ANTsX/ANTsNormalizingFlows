@@ -1,8 +1,8 @@
 import unittest
 import torch
 
-from normflows.transforms import Logit, Shift
-from normflows.flows.flow_test import FlowTest
+from antsnormflows.transforms import Logit, Shift
+from tests.flows.flow_test import FlowTest
 
 
 class TransformsTest(FlowTest):

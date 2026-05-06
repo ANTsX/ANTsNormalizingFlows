@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from normflows.utils import splines
+from antsnormflows.utils import splines
 from torch.testing import assert_close
 
 

@@ -3,7 +3,7 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "normflows"
+name = "antsnormflows"
 dynamic = ["version", "dependencies"]
 description = "PyTorch implementation of normalizing flows (Glow 2D/3D, coupling layers, utilities)"
 readme = { file = "README.md", content-type = "text/markdown" }
@@ -24,9 +24,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage   = "https://github.com/ntustison/normalizing-flows"
-Repository = "https://github.com/ntustison/normalizing-flows"
-Issues     = "https://github.com/ntustison/normalizing-flows/issues"
+Homepage   = "https://github.com/ANTsX/ANTsNormalizingFlows"
+Repository = "https://github.com/ANTsX/ANTsNormalizingFlows"
+Issues     = "https://github.com/ANTsX/ANTsNormalizingFlows/issues"
 
 [project.optional-dependencies]
 # pip install -e .[test], .[dev], .[docs], .[examples]
@@ -40,13 +40,13 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["normflows*"]
+include = ["antsnormflows*"]
 
 [tool.setuptools.package-data]
-normflows = ["py.typed"]
+antsnormflows = ["py.typed"]
 
 [tool.setuptools.dynamic]
-version = { attr = "normflows._version.__version__" }
+version = { attr = "antsnormflows._version.__version__" }
 dependencies = { file = ["requirements.txt"] }
 optional-dependencies.examples = { file = ["requirements_examples.txt"] }
 

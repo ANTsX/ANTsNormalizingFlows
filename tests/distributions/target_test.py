@@ -2,8 +2,8 @@ import unittest
 
 import torch
 
-from normflows.distributions.base import DiagGaussian
-from normflows.distributions.target import TwoMoons, \
+from antsnormflows.distributions.base import DiagGaussian
+from antsnormflows.distributions.target import TwoMoons, \
     CircularGaussianMixture, RingMixture, TwoIndependent, \
     ConditionalDiagGaussian
 

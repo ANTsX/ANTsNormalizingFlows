@@ -4,8 +4,8 @@ import numpy as np
 
 from torch.testing import assert_close
 
-from normflows.nets import MLP
-from normflows.distributions.encoder import Dirac, Uniform, \
+from antsnormflows.nets import MLP
+from antsnormflows.distributions.encoder import Dirac, Uniform, \
     ConstDiagGaussian, NNDiagGaussian
 
 

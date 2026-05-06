@@ -1,9 +1,8 @@
 import unittest
 import torch
 
-from normflows.flows import Planar
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.flows import Planar
+from tests.flows.flow_test import FlowTest
 
 class PlanarTest(FlowTest):
     def test_planar(self):

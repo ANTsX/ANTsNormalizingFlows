@@ -1,9 +1,8 @@
 import torch
 import unittest
 
-from normflows.flows.affine import autoregressive
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.flows.affine import autoregressive
+from tests.flows.flow_test import FlowTest
 
 class MaskedAffineAutoregressiveTest(FlowTest):
     def test_maf(self):
