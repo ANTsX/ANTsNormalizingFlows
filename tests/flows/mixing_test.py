@@ -1,10 +1,9 @@
 import unittest
 import torch
 
-from normflows.flows.mixing import Permute, \
+from antsnormflows.flows.mixing import Permute, \
     LULinearPermute, InvertibleAffine
-from normflows.flows.flow_test import FlowTest
-
+from tests.flows.flow_test import FlowTest
 
 class MixingTest(FlowTest):
     def test_permute(self):

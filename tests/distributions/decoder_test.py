@@ -1,8 +1,8 @@
 import unittest
 import torch
 
-from normflows.nets import MLP
-from normflows.distributions.decoder import NNDiagGaussianDecoder, \
+from antsnormflows.nets import MLP
+from antsnormflows.distributions.decoder import NNDiagGaussianDecoder, \
     NNBernoulliDecoder
 
 

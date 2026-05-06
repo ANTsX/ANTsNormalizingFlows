@@ -20,7 +20,7 @@ pip install -e .[examples]
 ## Quick start
 
 ```python
-import normflows as nf
+import antsnormflows as nf
 
 # Base distribution (2D diagonal Gaussian)
 base = nf.distributions.base.DiagGaussian(2)
@@ -44,7 +44,7 @@ loss.backward()
 
 ## Citation
 
-If you use `normflows`, please cite the corresponding paper:
+If you use `antsnormflows`, please cite the corresponding paper:
 
 > Stimper et al., (2023). normflows: A PyTorch Package for Normalizing Flows.
 > Journal of Open Source Software, 8(86), 5361, https://doi.org/10.21105/joss.05361

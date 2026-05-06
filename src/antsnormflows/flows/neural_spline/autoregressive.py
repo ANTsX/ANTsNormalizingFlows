@@ -9,9 +9,9 @@ from torch.nn import functional as F
 
 from ... import utils
 from ..affine.autoregressive import Autoregressive
-from normflows.nets import made as made_module
-from normflows.utils import splines
-from normflows.utils.nn import PeriodicFeaturesElementwise
+from antsnormflows.nets import made as made_module
+from antsnormflows.utils import splines
+from antsnormflows.utils.nn import PeriodicFeaturesElementwise
 
 
 class MaskedPiecewiseRationalQuadraticAutoregressive(Autoregressive):

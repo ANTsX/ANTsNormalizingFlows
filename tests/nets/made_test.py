@@ -6,7 +6,7 @@ Code partially taken from https://github.com/bayesiains/nsf
 import torch
 import unittest
 
-from normflows.nets import made
+from antsnormflows.nets import made
 from torch.testing import assert_close
 
 

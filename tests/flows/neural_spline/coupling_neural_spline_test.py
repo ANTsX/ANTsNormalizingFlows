@@ -6,11 +6,11 @@ Code partially taken from https://github.com/bayesiains/nsf
 import torch
 import unittest
 
-from normflows import nets as nn_
+from antsnormflows import nets as nn_
 
-from normflows.flows.neural_spline import coupling
-from normflows.flows.flow_test import FlowTest
-from normflows import utils
+from antsnormflows.flows.neural_spline import coupling
+from tests.flows.flow_test import FlowTest
+from antsnormflows import utils
 
 
 def create_coupling_transform(shape, **kwargs):

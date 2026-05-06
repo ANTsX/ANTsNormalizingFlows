@@ -1,9 +1,9 @@
 import unittest
 import torch
 
-from normflows.flows import Radial
-from normflows.flows.flow_test import FlowTest
-from normflows.flows import Split
+from antsnormflows.flows import Radial
+from tests.flows.flow_test import FlowTest
+from antsnormflows.flows import Split
 
 import matplotlib.pyplot as plt
 

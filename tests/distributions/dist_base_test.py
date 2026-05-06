@@ -2,11 +2,11 @@ import unittest
 import torch
 import numpy as np
 
-from normflows.distributions.base import DiagGaussian, UniformGaussian, \
+from antsnormflows.distributions.base import DiagGaussian, UniformGaussian, \
     ClassCondDiagGaussian, GlowBase, AffineGaussian, GaussianMixture, \
     GaussianPCA, Uniform, ConditionalDiagGaussian
-from normflows.distributions.distribution_test import DistributionTest
-from normflows.nets.mlp import MLP
+from tests.distributions.distribution_test import DistributionTest
+from antsnormflows.nets.mlp import MLP
 
 
 class BaseTest(DistributionTest):

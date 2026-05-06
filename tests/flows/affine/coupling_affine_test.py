@@ -1,10 +1,9 @@
 import unittest
 import torch
 
-from normflows.flows import MaskedAffineFlow, CCAffineConst
-from normflows.nets import MLP
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.flows import MaskedAffineFlow, CCAffineConst
+from antsnormflows.nets import MLP
+from tests.flows.flow_test import FlowTest
 
 class CouplingTest(FlowTest):
     def test_mask_affine(self):

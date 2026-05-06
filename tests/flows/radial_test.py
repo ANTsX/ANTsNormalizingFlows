@@ -1,9 +1,8 @@
 import unittest
 import torch
 
-from normflows.flows import Radial
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.flows import Radial
+from tests.flows.flow_test import FlowTest
 
 class RadialTest(FlowTest):
     def test_radial(self):

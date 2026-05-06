@@ -2,7 +2,7 @@ import unittest
 import torch
 import numpy as np
 
-from normflows.distributions.prior import ImagePrior, TwoModes, \
+from antsnormflows.distributions.prior import ImagePrior, TwoModes, \
     Sinusoidal, Sinusoidal_split, Sinusoidal_gap, Smiley
 
 

@@ -2,9 +2,8 @@ import unittest
 import torch
 import numpy as np
 
-from normflows.flows.periodic import PeriodicWrap, PeriodicShift
-from normflows.flows.flow_test import FlowTest
-
+from antsnormflows.flows.periodic import PeriodicWrap, PeriodicShift
+from tests.flows.flow_test import FlowTest
 
 class PeriodicTest(FlowTest):
     def test_periodic_wrap(self):
