@@ -1,3 +1,14 @@
+Copyright (c) 2026 ANTsX Gihub Organization members
+
+Except as noted below, this repository is licensed under the Apache License Version 2.0.
+
+This repository was forked from "normalizing-flows" by Vincent Stimper. The original repository can be found at
+
+https://github.com/VincentStimper/normalizing-flows
+
+The license for normalizing-flows is included below. It applies to all content prior to
+the fork.
+
 MIT License
 
 Copyright (c) 2020 Vincent Stimper

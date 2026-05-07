@@ -1,7 +1,8 @@
 # ANTsNormalizingFlows
 
-An updated PyTorch package (from [normflows](https://github.com/VincentStimper/normalizing-flows)) 
-for discrete normalizing flows (NICE, Real NVP, Glow, Neural Spline Flows, etc.).
+An updated PyTorch package (from
+[normflows](https://github.com/VincentStimper/normalizing-flows)) for discrete normalizing
+flows (NICE, Real NVP, Glow, Neural Spline Flows, etc.).
 
 ## Installation
 
