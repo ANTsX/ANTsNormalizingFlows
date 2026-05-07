@@ -2,8 +2,9 @@
 
 An updated PyTorch package (from
 [normflows](https://github.com/VincentStimper/normalizing-flows)) for discrete normalizing
-flows (NICE, Real NVP, Glow, Neural Spline Flows, etc.).
+flows.
 
+<!-- 
 ## Installation
 
 Requires Python ≥ 3.10 and a working PyTorch installation (GPU optional).
@@ -17,6 +18,8 @@ To run example notebooks:
 ```bash
 pip install -e .[examples]
 ```
+
+-->
 
 ## Quick start
 
