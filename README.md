@@ -48,10 +48,13 @@ loss.backward()
 
 ## Citation
 
-If you use `antsnormflows`, please cite the corresponding paper:
+If you use `antsnormflows`, please cite the corresponding papers:
 
 > Stimper et al., (2023). normflows: A PyTorch Package for Normalizing Flows.
-> Journal of Open Source Software, 8(86), 5361, https://doi.org/10.21105/joss.05361
+> Journal of Open Source Software, 8(86), 5361, [JOSS](https://doi.org/10.21105/joss.05361).
+>
+> Tustison et al., (2026).  Deep Computational Anatomy via Latent-Aligned Normalizing
+> Flows.  [biorxiv](https://www.biorxiv.org/content/10.64898/2026.05.05.723039v1).
 
 **BibTeX**
 
@@ -67,5 +70,19 @@ If you use `antsnormflows`, please cite the corresponding paper:
   doi = {10.21105/joss.05361},
   url = {https://doi.org/10.21105/joss.05361},
   year = {2023}
+}
+```
+
+```bibtex
+@article {Tustison2026.05.05.723039,
+	author = {Tustison, Nicholas James and Avants, Brian B. and Cook, Philip A. and Gee, James C. and Stone, James R.},
+	title = {Deep Computational Anatomy via Latent-Aligned Multiview Normalizing Flows},
+	elocation-id = {2026.05.05.723039},
+	year = {2026},
+	doi = {10.64898/2026.05.05.723039},
+	publisher = {Cold Spring Harbor Laboratory},
+	URL = {https://www.biorxiv.org/content/early/2026/05/10/2026.05.05.723039},
+	eprint = {https://www.biorxiv.org/content/early/2026/05/10/2026.05.05.723039.full.pdf},
+	journal = {bioRxiv}
 }
 ```
