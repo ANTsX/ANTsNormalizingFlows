@@ -56,6 +56,7 @@ If you use `antsnormflows`, please cite the corresponding papers:
 * Tustison et al., (2026).  Deep Computational Anatomy via Latent-Aligned Normalizing
   Flows.  [biorxiv](https://www.biorxiv.org/content/10.64898/2026.05.05.723039v1).
 
+<!-- 
 **BibTeX**
 
 ```bibtex
@@ -86,3 +87,5 @@ If you use `antsnormflows`, please cite the corresponding papers:
 	journal = {bioRxiv}
 }
 ```
+-->
+
