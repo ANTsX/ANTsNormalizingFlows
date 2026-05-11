@@ -8,7 +8,7 @@ authors:
 title: "LAMNr Flows"
 version: 1.0.0
 date-released: 2026-05-10
-url: "https://github.com/ANTsX/ANTsTorch"
+url: "https://github.com/ANTsX/ANTsNormalizingFlows"
 
 preferred-citation:
   type: article
