@@ -1,58 +1,55 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
+message: "If you use this software, please cite it using the preferred-citation."
 authors:
-  - family-names: Tustison
-    given-names: Nicholas James
-  - family-names: Avants
-    given-names: Brian B.
-title: "LAMNr Flows: Deep Computational Anatomy via Latent-Aligned Multiview Normalizing Flows"
+  - family-names: "Tustison"
+    given-names: "Nicholas James"
+  - family-names: "Avants"
+    given-names: "Brian B."
+title: "LAMNr Flows"
 version: 1.0.0
-doi: 10.64898/2026.05.05.723039
 date-released: 2026-05-10
-url: "https://github.com/ANTsX/ANTsNormalizingFlows"
+url: "https://github.com/ANTsX/ANTsTorch"
 
-# 1. Votre citation principale (bioRxiv)
 preferred-citation:
   type: article
   authors:
-    - family-names: Tustison
-      given-names: Nicholas J.
-    - family-names: Avants
-      given-names: Brian B.
-    - family-names: Cook
-      given-names: Philip A.
-    - family-names: Gee
-      given-names: James C.
-    - family-names: Stone
-      given-names: James R.
+    - family-names: "Tustison"
+      given-names: "Nicholas James"
+    - family-names: "Avants"
+      given-names: "Brian B."
+    - family-names: "Cook"
+      given-names: "Philip A."
+    - family-names: "Gee"
+      given-names: "James C."
+    - family-names: "Stone"
+      given-names: "James R."
   title: "Deep Computational Anatomy via Latent-Aligned Multiview Normalizing Flows"
   journal: "bioRxiv"
   year: 2026
-  doi: 10.64898/2026.05.05.723039
+  doi: "10.64898/2026.05.05.723039"
   url: "https://www.biorxiv.org/content/early/2026/05/10/2026.05.05.723039"
 
-# 2. Citations additionnelles (normflows)
 references:
   - type: article
     authors:
-      - family-names: Stimper
-        given-names: Vincent
-      - family-names: Liu
-        given-names: David
-      - family-names: Campbell
-        given-names: Andrew
-      - family-names: Berenz
-        given-names: Vincent
-      - family-names: Ryll
-        given-names: Lukas
-      - family-names: Schölkopf
-        given-names: Bernhard
-      - family-names: Hernández-Lobato
-        given-names: José Miguel
+      - family-names: "Stimper"
+        given-names: "Vincent"
+      - family-names: "Liu"
+        given-names: "David"
+      - family-names: "Campbell"
+        given-names: "Andrew"
+      - family-names: "Berenz"
+        given-names: "Vincent"
+      - family-names: "Ryll"
+        given-names: "Lukas"
+      - family-names: "Schölkopf"
+        given-names: "Bernhard"
+      - family-names: "Hernández-Lobato"
+        given-names: "José Miguel"
     title: "normflows: A PyTorch Package for Normalizing Flows"
     journal: "Journal of Open Source Software"
+    doi: "10.21105/joss.05361"
+    year: 2023
     volume: 8
     issue: 86
     start: 5361
-    year: 2023
-    [cite_start]doi: 10.21105/joss.05361 [cite: 2, 3]
