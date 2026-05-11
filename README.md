@@ -50,11 +50,11 @@ loss.backward()
 
 If you use `antsnormflows`, please cite the corresponding papers:
 
-> Stimper et al., (2023). normflows: A PyTorch Package for Normalizing Flows.
-> Journal of Open Source Software, 8(86), 5361, [JOSS](https://doi.org/10.21105/joss.05361).
->
-> Tustison et al., (2026).  Deep Computational Anatomy via Latent-Aligned Normalizing
-> Flows.  [biorxiv](https://www.biorxiv.org/content/10.64898/2026.05.05.723039v1).
+* Stimper et al., (2023). normflows: A PyTorch Package for Normalizing Flows.
+  Journal of Open Source Software, 8(86), 5361, [JOSS](https://doi.org/10.21105/joss.05361).
+
+* Tustison et al., (2026).  Deep Computational Anatomy via Latent-Aligned Normalizing
+  Flows.  [biorxiv](https://www.biorxiv.org/content/10.64898/2026.05.05.723039v1).
 
 **BibTeX**
 
