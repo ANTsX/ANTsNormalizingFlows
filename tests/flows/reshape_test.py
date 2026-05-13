@@ -5,8 +5,6 @@ from antsnormflows.flows import Radial
 from tests.flows.flow_test import FlowTest
 from antsnormflows.flows import Split
 
-import matplotlib.pyplot as plt
-
 class ReshapeTest(FlowTest):
 
     def validate_checkerboard_split(self,
@@ -44,16 +42,18 @@ class ReshapeTest(FlowTest):
         output_tensor, _ = split_layer.inverse(z)
 
         if input_tensor.ndim == 4 and input_tensor.size(1) == 1:
-            fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-            axes[0].imshow(input_tensor[0, 0].cpu().numpy(), cmap='gray')
-            axes[0].set_title("Input")
-            axes[0].axis('off')
             mask = create_checkerboard_mask(input_tensor.shape, inverse=('inv' in mode))
             masked_z1 = input_tensor.clone()
             masked_z1[~mask] = 0
             masked_z2 = input_tensor.clone()
             masked_z2[mask] = 0
             if do_visualization:
+                import matplotlib.pyplot as plt
+
+                fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+                axes[0].imshow(input_tensor[0, 0].cpu().numpy(), cmap='gray')
+                axes[0].set_title("Input")
+                axes[0].axis('off')
                 axes[1].imshow(masked_z1[0, 0].cpu().numpy(), cmap='gray')
                 axes[1].set_title("z1 (Masked)")
                 axes[1].axis('off')
@@ -65,6 +65,8 @@ class ReshapeTest(FlowTest):
         elif input_tensor.ndim == 5 and input_tensor.size(1) == 1:
             # For 3D, we can visualize a single slice (e.g., the middle depth slice)
             if do_visualization:
+                import matplotlib.pyplot as plt
+
                 mid_depth = input_tensor.size(2) // 2
                 fig, axes = plt.subplots(1, 3, figsize=(12, 4))
                 axes[0].imshow(input_tensor[0, 0, mid_depth].cpu().numpy(), cmap='gray')
