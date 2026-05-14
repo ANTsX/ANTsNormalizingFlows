@@ -14,17 +14,19 @@ jobs:
         uses: actions/setup-python@v6
         with:
           cache: 'pip'
-      - name: Install dependencies
+          python-version: 3.x
+      - name: Install dependencies and antsnormflows
         run: |
           pip install -r requirements.txt
           pip install pytest pytest-coverage
+          pip install -e .[test]
       - name: Test with pytest
         run: |
           pytest --cov
       - name: Creating coverage folder
         run: |
           mkdir -p coverage
-      - name: Coverage Bagdge
+      - name: Coverage Badge
         uses: tj-actions/coverage-badge-py@v1.8
         with:
           output: coverage/coverage.svg
