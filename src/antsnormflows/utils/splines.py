@@ -10,14 +10,6 @@ DEFAULT_MIN_BIN_HEIGHT = 1e-3
 DEFAULT_MIN_DERIVATIVE = 1e-3
 
 
-@torch.compile
-def search_sorted(bin_locations: torch.Tensor, inputs: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    dims = bin_locations.shape[-1]
-    adjust = torch.zeros(dims, device=bin_locations.device, dtype=bin_locations.dtype)
-    adjust[-1] = eps
-    bl = bin_locations + adjust
-    return torch.sum(inputs[..., None] >= bl, dim=-1) - 1
-
 import os
 
 # Ne compiler que si on n'est pas dans l'environnement CI
@@ -26,6 +18,14 @@ if os.environ.get("CI") == "true":
         return fn
 else:
     conditional_compile = torch.compile
+
+@conditional_compile
+def search_sorted(bin_locations: torch.Tensor, inputs: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    dims = bin_locations.shape[-1]
+    adjust = torch.zeros(dims, device=bin_locations.device, dtype=bin_locations.dtype)
+    adjust[-1] = eps
+    bl = bin_locations + adjust
+    return torch.sum(inputs[..., None] >= bl, dim=-1) - 1
 
 @conditional_compile
 def unconstrained_rational_quadratic_spline(

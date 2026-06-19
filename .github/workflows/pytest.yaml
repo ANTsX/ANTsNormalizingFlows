@@ -15,7 +15,10 @@ jobs:
         uses: actions/setup-python@v6
         with:
           cache: 'pip'
-          
+
+      - name: Clear Torch Inductor Cache
+        run: rm -rf ~/.cache/torch/inductor/*
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
