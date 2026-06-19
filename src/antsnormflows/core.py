@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import contextlib
 import numpy as np
 
 from . import distributions
@@ -38,32 +39,6 @@ class NormalizingFlow(nn.Module):
             z, _ = flow(z)
         return z
 
-    def forward_and_log_det(self, z):
-        """Transforms latent variable z to the flow variable x and
-        computes log determinant of the Jacobian
-
-        Args:
-          z: Batch in the latent space
-
-        Returns:
-          Batch in the space of the target distribution,
-          log determinant of the Jacobian
-        """
-        log_det = torch.zeros(len(z), device=z.device, dtype=z.dtype)
-
-        use_checkpoint = self.training and len(self.flows) > 10 
-
-        for flow in self.flows:
-            if use_checkpoint:
-                def run_flow(latent_z):
-                    return flow(latent_z)
-                z, log_d = checkpoint(run_flow, z, use_reentrant=False)
-            else:
-                z, log_d = flow(z)
-                
-            log_det = log_det + log_d
-        return z, log_det
-
     def inverse(self, x):
         """Transforms flow variable x to the latent variable z
 
@@ -77,23 +52,51 @@ class NormalizingFlow(nn.Module):
             x, _ = self.flows[i].inverse(x)
         return x
 
-    def inverse_and_log_det(self, x):
-        """Transforms flow variable x to the latent variable z and
-        computes log determinant of the Jacobian
+    def forward_and_log_det(self, z, dtype=None):
+        if dtype is not None:
+            ctx = torch.amp.autocast(device_type=z.device.type, dtype=dtype)
+        else:
+            ctx = contextlib.nullcontext()
 
-        Args:
-          x: Batch in the space of the target distribution
+        with ctx:
+            log_det = torch.zeros(len(z), device=z.device, dtype=torch.float32)
+            use_checkpoint = self.training and len(self.flows) > 10 
 
-        Returns:
-          Batch in the latent space, log determinant of the
-          Jacobian
-        """
-        log_det = torch.zeros(len(x), device=x.device)
-        for i in range(len(self.flows) - 1, -1, -1):
-            x, log_d = self.flows[i].inverse(x)
-            log_det += log_d
+            for flow in self.flows:
+                if use_checkpoint:
+                    def run_flow(latent_z):
+                        return flow(latent_z)
+                    z, log_d = checkpoint.checkpoint(run_flow, z, use_reentrant=False)
+                else:
+                    z, log_d = flow(z)
+                
+                log_det += log_d.float()
+                
+        return z, log_det
+
+    def inverse_and_log_det(self, x, dtype=None):
+        if dtype is not None:
+            ctx = torch.amp.autocast(device_type=x.device.type, dtype=dtype)
+        else:
+            ctx = contextlib.nullcontext()
+
+        with ctx:
+            log_det = torch.zeros(len(x), device=x.device, dtype=torch.float32)
+            use_checkpoint = self.training and len(self.flows) > 10 
+
+            for i in range(len(self.flows) - 1, -1, -1):
+                flow = self.flows[i]
+                if use_checkpoint:
+                    def run_flow_inv(latent_x):
+                        return flow.inverse(latent_x)
+                    x, log_d = checkpoint.checkpoint(run_flow_inv, x, use_reentrant=False)
+                else:
+                    x, log_d = flow.inverse(x)
+                
+                log_det += log_d.float()
+                
         return x, log_det
-
+        
     def forward_kld(self, x):
         """Estimates forward KL divergence, see [arXiv 1912.02762](https://arxiv.org/abs/1912.02762)
 
@@ -221,7 +224,6 @@ class NormalizingFlow(nn.Module):
         """
         self.load_state_dict(torch.load(path))
 
-
 class ConditionalNormalizingFlow(NormalizingFlow):
     """
     Conditional normalizing flow model, providing condition,
@@ -242,33 +244,6 @@ class ConditionalNormalizingFlow(NormalizingFlow):
             z, _ = flow(z, context=context)
         return z
 
-    def forward_and_log_det(self, z, context=None):
-        """Transforms latent variable z to the flow variable x and
-        computes log determinant of the Jacobian
-
-        Args:
-          z: Batch in the latent space
-          context: Batch of conditions/context
-
-        Returns:
-          Batch in the space of the target distribution,
-          log determinant of the Jacobian
-        """
-        log_det = torch.zeros(len(z), device=z.device, dtype=z.dtype)
-
-        use_checkpoint = self.training and len(self.flows) > 10
-
-        for flow in self.flows:
-            if use_checkpoint:
-                def run_flow(latent_z, ctx):
-                    return flow(latent_z, context=ctx)
-                z, log_d = checkpoint(run_flow, z, context, use_reentrant=False)
-            else:
-                z, log_d = flow(z, context=context)
-                
-            log_det = log_det + log_d
-        return z, log_det
-
     def inverse(self, x, context=None):
         """Transforms flow variable x to the latent variable z
 
@@ -283,22 +258,49 @@ class ConditionalNormalizingFlow(NormalizingFlow):
             x, _ = self.flows[i].inverse(x, context=context)
         return x
 
-    def inverse_and_log_det(self, x, context=None):
-        """Transforms flow variable x to the latent variable z and
-        computes log determinant of the Jacobian
+    def forward_and_log_det(self, z, context=None, dtype=None):
+        if dtype is not None:
+            ctx = torch.amp.autocast(device_type=z.device.type, dtype=dtype)
+        else:
+            ctx = contextlib.nullcontext()
 
-        Args:
-          x: Batch in the space of the target distribution
-          context: Batch of conditions/context
+        with ctx:
+            log_det = torch.zeros(len(z), device=z.device, dtype=torch.float32)
+            use_checkpoint = self.training and len(self.flows) > 10 
 
-        Returns:
-          Batch in the latent space, log determinant of the
-          Jacobian
-        """
-        log_det = torch.zeros(len(x), device=x.device)
-        for i in range(len(self.flows) - 1, -1, -1):
-            x, log_d = self.flows[i].inverse(x, context=context)
-            log_det += log_d
+            for flow in self.flows:
+                if use_checkpoint:
+                    def run_flow(latent_z, ctx_val):
+                        return flow(latent_z, context=ctx_val)
+                    z, log_d = checkpoint.checkpoint(run_flow, z, context, use_reentrant=False)
+                else:
+                    z, log_d = flow(z, context=context)
+                
+                log_det += log_d.float()
+                
+        return z, log_det
+
+    def inverse_and_log_det(self, x, context=None, dtype=None):
+        if dtype is not None:
+            ctx = torch.amp.autocast(device_type=x.device.type, dtype=dtype)
+        else:
+            ctx = contextlib.nullcontext()
+
+        with ctx:
+            log_det = torch.zeros(len(x), device=x.device, dtype=torch.float32)
+            use_checkpoint = self.training and len(self.flows) > 10 
+
+            for i in range(len(self.flows) - 1, -1, -1):
+                flow = self.flows[i]
+                if use_checkpoint:
+                    def run_flow_inv(latent_x, ctx_val):
+                        return flow.inverse(latent_x, context=ctx_val)
+                    x, log_d = checkpoint.checkpoint(run_flow_inv, x, context, use_reentrant=False)
+                else:
+                    x, log_d = flow.inverse(x, context=context)
+                
+                log_det += log_d.float()
+                
         return x, log_det
 
     def sample(self, num_samples=1, context=None):
@@ -382,7 +384,6 @@ class ConditionalNormalizingFlow(NormalizingFlow):
             utils.set_requires_grad(self, True)
         log_p = self.p.log_prob(z, context=context)
         return torch.mean(log_q) - beta * torch.mean(log_p)
-
 
 class ClassCondFlow(nn.Module):
     """
@@ -469,7 +470,6 @@ class ClassCondFlow(nn.Module):
         """
         self.load_state_dict(torch.load(path))
 
-
 class MultiscaleFlow(nn.Module):
     """
     Normalizing Flow model with multiscale architecture, see RealNVP or Glow paper
@@ -521,67 +521,64 @@ class MultiscaleFlow(nn.Module):
         """
         return -self.log_prob(x, y)
 
-    def forward_and_log_det(self, z):
-        """Get observed variable x from list of latent variables z
+    def forward_and_log_det(self, z, dtype=None):
+        device_type = z[0].device.type if isinstance(z, list) else z.device.type
+        
+        if dtype is not None:
+            ctx = torch.amp.autocast(device_type=device_type, dtype=dtype)
+        else:
+            ctx = contextlib.nullcontext()
+            
+        with ctx:
+            log_det = torch.zeros(len(z[0]), dtype=torch.float32, device=z[0].device)
 
-        Args:
-            z: List of latent variables
+            for i in range(self.num_levels):
+                if i == 0:
+                    z_ = z[0]
+                else:
+                    z_, log_det_ = self.merges[i - 1]([z_, z[i]])
+                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
 
-        Returns:
-            Observed variable x, log determinant of Jacobian
-        """
-        log_det = torch.zeros(len(z[0]), dtype=z[0].dtype, device=z[0].device)
+                for flow in self.flows[i]:
+                    z_, log_det_ = flow(z_)
+                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
 
-        for i in range(self.num_levels):
-
-            if i == 0:
-                z_ = z[0]
-            else:
-                z_, log_det_ = self.merges[i - 1]([z_, z[i]])
-                log_det += log_det_
-
-            for _, flow in enumerate(self.flows[i]):
-                z_, log_det_ = flow(z_)
-                log_det += log_det_
-
-        if self.transform is not None:
-            z_, log_det_ = self.transform(z_)
-            log_det += log_det_
+            if self.transform is not None:
+                z_, log_det_ = self.transform(z_)
+                log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
 
         return z_, log_det
 
-    def inverse_and_log_det(self, x):
-        """Get latent variable z from observed variable x
+    def inverse_and_log_det(self, x, dtype=None):
+        if dtype is not None:
+            ctx = torch.amp.autocast(device_type=x.device.type, dtype=dtype)
+        else:
+            ctx = contextlib.nullcontext()
 
-        Args:
-            x: Observed variable
+        with ctx:
+            log_det = torch.zeros(x.shape[0], dtype=torch.float32, device=x.device)
 
-        Returns:
-            List of latent variables z, log determinant of Jacobian
-        """
-        log_det = torch.zeros(x.shape[0], dtype=x.dtype, device=x.device)
+            if self.transform is not None:
+                x, log_det_ = self.transform.inverse(x)
+                log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
 
-        if self.transform is not None:
-            x, log_det_ = self.transform.inverse(x)
-            log_det += log_det_
+            z = [None] * self.num_levels
 
-        z = [None] * self.num_levels
+            for i in range(self.num_levels - 1, -1, -1):
+                for flow in reversed(self.flows[i]):
+                    x, log_det_ = flow.inverse(x)
+                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
 
-        for i in range(self.num_levels - 1, -1, -1):
-            for j, flow in enumerate(reversed(self.flows[i])):
-                x, log_det_ = flow.inverse(x)
-                log_det += log_det_
+                if i == 0:
+                    z[i] = x
+                else:
+                    [x, z[i]], log_det_ = self.merges[i - 1].inverse(x)
+                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
 
-            if i == 0:
-                z[i] = x
-            else:
-                [x, z[i]], log_det_ = self.merges[i - 1].inverse(x)
-                log_det += log_det_
-
-        if self._latent_shapes is None:
-            zs = z if isinstance(z, (list, tuple)) else [z]
-            self._latent_shapes = [tuple(zi.shape[1:]) for zi in zs] 
-            self._x_shape = tuple(x.shape[1:])
+            if self._latent_shapes is None:
+                zs = z if isinstance(z, (list, tuple)) else [z]
+                self._latent_shapes = [tuple(zi.shape[1:]) for zi in zs] 
+                self._x_shape = tuple(x.shape[1:])
 
         return z, log_det
 
