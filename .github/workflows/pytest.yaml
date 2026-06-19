@@ -21,7 +21,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -e .[test]
-          
+          pip install pytest pytest-cov
+          pip install torch --upgrade
+
       - name: Test with pytest
         run: |
           python -m pytest --cov

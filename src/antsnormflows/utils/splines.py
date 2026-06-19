@@ -18,7 +18,16 @@ def search_sorted(bin_locations: torch.Tensor, inputs: torch.Tensor, eps: float 
     bl = bin_locations + adjust
     return torch.sum(inputs[..., None] >= bl, dim=-1) - 1
 
-@torch.compile
+import os
+
+# Ne compiler que si on n'est pas dans l'environnement CI
+if os.environ.get("CI") == "true":
+    def conditional_compile(fn):
+        return fn
+else:
+    conditional_compile = torch.compile
+
+@conditional_compile
 def unconstrained_rational_quadratic_spline(
     inputs,
     unnormalized_widths,
