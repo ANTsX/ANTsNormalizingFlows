@@ -123,8 +123,7 @@ class NormalizingFlow(nn.Module):
           Estimate of the reverse KL divergence averaged over latent samples
         """
         z, log_q_ = self.q0(num_samples)
-        log_q = torch.zeros_like(log_q_)
-        log_q += log_q_
+        log_q = log_q_.clone()
         for flow in self.flows:
             z, log_det = flow(z)
             log_q -= log_det
