@@ -100,14 +100,8 @@ class Invertible1x1Conv(Flow):
         U = torch.triu(self.U, diagonal=1) + torch.diag(self.sign_S * s32.to(self.U.dtype))
 
         if inverse:
-            # keep your existing double-precision inversion path
-            if self.log_S.dtype == torch.float64:
-                L_inv = torch.inverse(L)
-                U_inv = torch.inverse(U)
-            else:
-                L_inv = torch.inverse(L.double()).type(self.log_S.dtype)
-                U_inv = torch.inverse(U.double()).type(self.log_S.dtype)
-            W = U_inv @ L_inv @ self.P.t()
+            Y = torch.linalg.solve_triangular(L, self.P.t(), upper=False, unitriangular=True)
+            W = torch.linalg.solve_triangular(U, Y, upper=True)
         else:
             W = self.P @ L @ U
         return W
@@ -195,13 +189,8 @@ class Invertible1x1x1Conv(Flow):
             s32 = torch.exp(log_s32)
         U = torch.triu(self.U, diagonal=1) + torch.diag(self.sign_S * s32.to(self.U.dtype))
         if inverse:
-            if self.log_S.dtype == torch.float64:
-                L_inv = torch.inverse(L)
-                U_inv = torch.inverse(U)
-            else:
-                L_inv = torch.inverse(L.double()).type(self.log_S.dtype)
-                U_inv = torch.inverse(U.double()).type(self.log_S.dtype)
-            W = U_inv @ L_inv @ self.P.t()
+            Y = torch.linalg.solve_triangular(L, self.P.t(), upper=False, unitriangular=True)
+            W = torch.linalg.solve_triangular(U, Y, upper=True)
         else:
             W = self.P @ L @ U
         return W
@@ -289,13 +278,8 @@ class InvertibleAffine(Flow):
             self.sign_S * torch.exp(self.log_S)
         )
         if inverse:
-            if self.log_S.dtype == torch.float64:
-                L_inv = torch.inverse(L)
-                U_inv = torch.inverse(U)
-            else:
-                L_inv = torch.inverse(L.double()).type(self.log_S.dtype)
-                U_inv = torch.inverse(U.double()).type(self.log_S.dtype)
-            W = U_inv @ L_inv @ self.P.t()
+            Y = torch.linalg.solve_triangular(L, self.P.t(), upper=False, unitriangular=True)
+            W = torch.linalg.solve_triangular(U, Y, upper=True)
         else:
             W = self.P @ L @ U
         return W
