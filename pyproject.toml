@@ -53,6 +53,7 @@ optional-dependencies.examples = { file = ["requirements_examples.txt"] }
 [tool.pytest.ini_options]
 addopts = "-ra -q --strict-markers"
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.black]
 line-length = 100
