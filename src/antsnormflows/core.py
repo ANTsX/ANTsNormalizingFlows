@@ -5,10 +5,7 @@ import numpy as np
 from . import distributions
 from . import utils
 
-from math import prod
-
-import os
-
+from torch.utils.checkpoint import checkpoint
 
 class NormalizingFlow(nn.Module):
     """
@@ -52,10 +49,19 @@ class NormalizingFlow(nn.Module):
           Batch in the space of the target distribution,
           log determinant of the Jacobian
         """
-        log_det = torch.zeros(len(z), device=z.device)
+        log_det = torch.zeros(len(z), device=z.device, dtype=z.dtype)
+
+        use_checkpoint = self.training and len(self.flows) > 10 
+
         for flow in self.flows:
-            z, log_d = flow(z)
-            log_det += log_d
+            if use_checkpoint:
+                def run_flow(latent_z):
+                    return flow(latent_z)
+                z, log_d = checkpoint(run_flow, z, use_reentrant=False)
+            else:
+                z, log_d = flow(z)
+                
+            log_det = log_det + log_d
         return z, log_det
 
     def inverse(self, x):
@@ -249,10 +255,19 @@ class ConditionalNormalizingFlow(NormalizingFlow):
           Batch in the space of the target distribution,
           log determinant of the Jacobian
         """
-        log_det = torch.zeros(len(z), device=z.device)
+        log_det = torch.zeros(len(z), device=z.device, dtype=z.dtype)
+
+        use_checkpoint = self.training and len(self.flows) > 10
+
         for flow in self.flows:
-            z, log_d = flow(z, context=context)
-            log_det += log_d
+            if use_checkpoint:
+                def run_flow(latent_z, ctx):
+                    return flow(latent_z, context=ctx)
+                z, log_d = checkpoint(run_flow, z, context, use_reentrant=False)
+            else:
+                z, log_d = flow(z, context=context)
+                
+            log_det = log_det + log_d
         return z, log_det
 
     def inverse(self, x, context=None):
@@ -601,7 +616,7 @@ class MultiscaleFlow(nn.Module):
         for lvl, (base, event_shape) in enumerate(zip(bases, latent_shapes)):
             event_shape = tuple(event_shape)             # e.g., (C,H,W) or (C,D,H,W)
             need        = (num_samples, *event_shape)
-            flat_event  = prod(event_shape)
+            flat_event  = np.prod(event_shape)
 
             if self.class_cond:
                 z_i, log_q_i = base(num_samples, y)
