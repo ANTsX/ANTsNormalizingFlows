@@ -16,7 +16,6 @@ jobs:
         with:
           cache: 'pip'
           python-version: 3.x
-      - name: Install dependencies and antsnormflows
 
       - name: Clear Torch Inductor Cache
         run: rm -rf ~/.cache/torch/inductor/*
