@@ -7,23 +7,29 @@ from antsnormflows.utils.optim import update_lipschitz
 from tests.flows.flow_test import FlowTest
 
 class ResidualTest(FlowTest):
+    
     def test_residual_mlp(self):
         batch_size = 3
         hidden_units = 128
         hidden_layers = 2
-        params = [(2, False, True, 'geometric', True),
-                  (2, True, True, 'poisson', False),
-                  (4, True, False, 'geometric', False),
-                  (5, False, False, 'poisson', False)]
-        for latent_size, reduce_memory, exact_trace, n_dist, brute_force in params:
+        # On retire la colonne 'n_dist' (les 'geometric' et 'poisson')
+        params = [(2, False, True, True),
+                  (2, True, True, False),
+                  (4, True, False, False),
+                  (5, False, False, False)]
+        
+        for latent_size, reduce_memory, exact_trace, brute_force in params:
             with self.subTest(latent_size=latent_size, reduce_memory=reduce_memory,
-                              exact_trace=exact_trace, n_dist=n_dist,
-                              brute_force=brute_force):
+                              exact_trace=exact_trace, brute_force=brute_force):
                 layer = [latent_size] + [hidden_units] * hidden_layers + [latent_size]
                 net = LipschitzMLP(layer, init_zeros=exact_trace,
                                    lipschitz_const=0.9)
-                flow = Residual(net, reduce_memory=reduce_memory, n_dist=n_dist,
+                
+                # On instancie Residual sans l'argument n_dist
+                flow = Residual(net, reduce_memory=reduce_memory,
                                 exact_trace=exact_trace, brute_force=brute_force)
+                
+                # ... (le reste de la fonction reste identique)
                 inputs = torch.randn((batch_size, latent_size))
                 if exact_trace:
                     self.checkForwardInverse(flow, inputs, atol=1e-4, rtol=1e-4)

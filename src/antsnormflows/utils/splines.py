@@ -1,5 +1,7 @@
 import torch
 from torch.nn import functional as F
+import math
+from typing import Tuple
 
 import numpy as np
 
@@ -8,11 +10,24 @@ DEFAULT_MIN_BIN_HEIGHT = 1e-3
 DEFAULT_MIN_DERIVATIVE = 1e-3
 
 
-def searchsorted(bin_locations, inputs, eps=1e-6):
-    bin_locations[..., -1] += eps
-    return torch.sum(inputs[..., None] >= bin_locations, dim=-1) - 1
+import os
 
+# Ne compiler que si on n'est pas dans l'environnement CI
+if os.environ.get("CI") == "true":
+    def conditional_compile(fn):
+        return fn
+else:
+    conditional_compile = torch.compile
 
+@conditional_compile
+def search_sorted(bin_locations: torch.Tensor, inputs: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    dims = bin_locations.shape[-1]
+    adjust = torch.zeros(dims, device=bin_locations.device, dtype=bin_locations.dtype)
+    adjust[-1] = eps
+    bl = bin_locations + adjust
+    return torch.sum(inputs[..., None] >= bl, dim=-1) - 1
+
+@conditional_compile
 def unconstrained_rational_quadratic_spline(
     inputs,
     unnormalized_widths,
@@ -21,63 +36,56 @@ def unconstrained_rational_quadratic_spline(
     inverse=False,
     tails="linear",
     tail_bound=1.0,
-    min_bin_width=DEFAULT_MIN_BIN_WIDTH,
-    min_bin_height=DEFAULT_MIN_BIN_HEIGHT,
-    min_derivative=DEFAULT_MIN_DERIVATIVE,
+    min_bin_width=1e-3,
+    min_bin_height=1e-3,
+    min_derivative=1e-3,
 ):
     inside_interval_mask = (inputs >= -tail_bound) & (inputs <= tail_bound)
-    outside_interval_mask = ~inside_interval_mask
 
-    outputs = torch.zeros_like(inputs)
-    logabsdet = torch.zeros_like(inputs)
-
+    # 1. Traitement des limites (tails) sans indexation booléenne dynamique
     if tails == "linear":
-        unnormalized_derivatives_ = F.pad(unnormalized_derivatives, pad=(1, 1))
-        constant = np.log(np.exp(1 - min_derivative) - 1)
+        unnormalized_derivatives_ = F.pad(unnormalized_derivatives, pad=[1, 1])
+        constant = math.log(math.exp(1.0 - min_derivative) - 1.0)
         unnormalized_derivatives_[..., 0] = constant
         unnormalized_derivatives_[..., -1] = constant
-
-        outputs[outside_interval_mask] = inputs[outside_interval_mask]
-        logabsdet[outside_interval_mask] = 0
     elif tails == "circular":
-        unnormalized_derivatives_ = F.pad(unnormalized_derivatives, pad=(0, 1))
+        unnormalized_derivatives_ = F.pad(unnormalized_derivatives, pad=[0, 1])
         unnormalized_derivatives_[..., -1] = unnormalized_derivatives_[..., 0]
-
-        outputs[outside_interval_mask] = inputs[outside_interval_mask]
-        logabsdet[outside_interval_mask] = 0
-    elif isinstance(tails, list) or isinstance(tails, tuple):
+    elif isinstance(tails, (list, tuple)):
         unnormalized_derivatives_ = unnormalized_derivatives.clone()
-        ind_lin = [t == "linear" for t in tails]
-        ind_circ = [t == "circular" for t in tails]
-        constant = np.log(np.exp(1 - min_derivative) - 1)
-        unnormalized_derivatives_[..., ind_lin, 0] = constant
-        unnormalized_derivatives_[..., ind_lin, -1] = constant
-        unnormalized_derivatives_[..., ind_circ, -1] = unnormalized_derivatives_[
-            ..., ind_circ, 0
-        ]
+        constant = math.log(math.exp(1.0 - min_derivative) - 1.0)
+        # Boucle Python simple : parfaitement supportée par torch.compile
+        for i, t in enumerate(tails):
+            if t == "linear":
+                unnormalized_derivatives_[..., i, 0] = constant
+                unnormalized_derivatives_[..., i, -1] = constant
+            elif t == "circular":
+                unnormalized_derivatives_[..., i, -1] = unnormalized_derivatives_[..., i, 0]
     else:
-        raise RuntimeError("{} tails are not implemented.".format(tails))
+        raise RuntimeError(f"{tails} tails are not implemented.")
 
+    # 2. Remplacement du masque par un "Clamp" pour éviter les formes dynamiques
     if torch.is_tensor(tail_bound):
         tail_bound_ = torch.broadcast_to(tail_bound, inputs.shape)
-        left = -tail_bound_[inside_interval_mask]
-        right = tail_bound_[inside_interval_mask]
-        bottom = -tail_bound_[inside_interval_mask]
-        top = tail_bound_[inside_interval_mask]
+        left = -tail_bound_
+        right = tail_bound_
+        bottom = -tail_bound_
+        top = tail_bound_
+        # Équivalent de torch.clamp pour des tenseurs
+        inputs_clamped = torch.max(torch.min(inputs, tail_bound_), -tail_bound_)
     else:
         left = -tail_bound
         right = tail_bound
         bottom = -tail_bound
         top = tail_bound
+        inputs_clamped = torch.clamp(inputs, min=-tail_bound, max=tail_bound)
 
-    (
-        outputs_masked,
-        logabsdet_masked
-    ) = rational_quadratic_spline(
-        inputs=inputs[inside_interval_mask],
-        unnormalized_widths=unnormalized_widths[inside_interval_mask, :],
-        unnormalized_heights=unnormalized_heights[inside_interval_mask, :],
-        unnormalized_derivatives=unnormalized_derivatives_[inside_interval_mask, :],
+    # 3. Exécution de la spline sur l'ensemble du tenseur
+    outputs_spline, logabsdet_spline = rational_quadratic_spline(
+        inputs=inputs_clamped,
+        unnormalized_widths=unnormalized_widths,
+        unnormalized_heights=unnormalized_heights,
+        unnormalized_derivatives=unnormalized_derivatives_,
         inverse=inverse,
         left=left,
         right=right,
@@ -87,12 +95,10 @@ def unconstrained_rational_quadratic_spline(
         min_bin_height=min_bin_height,
         min_derivative=min_derivative,
     )
-    if outputs.dtype == outputs_masked.dtype and logabsdet.dtype == logabsdet_masked.dtype:
-        outputs[inside_interval_mask] = outputs_masked
-        logabsdet[inside_interval_mask] = logabsdet_masked
-    else:
-        outputs[inside_interval_mask] = outputs_masked.to(outputs.dtype)
-        logabsdet[inside_interval_mask] = logabsdet_masked.to(logabsdet.dtype)
+
+    # 4. Fusion propre avec torch.where (élimine l'avertissement IndexPutBackward0)
+    outputs = torch.where(inside_interval_mask, outputs_spline.to(inputs.dtype), inputs)
+    logabsdet = torch.where(inside_interval_mask, logabsdet_spline.to(inputs.dtype), torch.zeros_like(inputs))
 
     return outputs, logabsdet
 
@@ -142,9 +148,7 @@ def rational_quadratic_spline(
     cumheights = torch.cumsum(heights, dim=-1)
     cumheights = F.pad(cumheights, pad=(1, 0), mode="constant", value=0.0)
     if lim_tensor:
-        cumheights = (top[..., None] - bottom[..., None]) * cumheights + bottom[
-            ..., None
-        ]
+        cumheights = (top[..., None] - bottom[..., None]) * cumheights + bottom[..., None]
     else:
         cumheights = (top - bottom) * cumheights + bottom
     cumheights[..., 0] = bottom
@@ -152,9 +156,9 @@ def rational_quadratic_spline(
     heights = cumheights[..., 1:] - cumheights[..., :-1]
 
     if inverse:
-        bin_idx = searchsorted(cumheights, inputs)[..., None]
+        bin_idx = search_sorted(cumheights, inputs)[..., None]
     else:
-        bin_idx = searchsorted(cumwidths, inputs)[..., None]
+        bin_idx = search_sorted(cumwidths, inputs)[..., None]
 
     input_cumwidths = cumwidths.gather(-1, bin_idx)[..., 0]
     input_bin_widths = widths.gather(-1, bin_idx)[..., 0]

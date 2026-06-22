@@ -8,11 +8,9 @@ from .base import Flow
 
 # Code taken from https://github.com/rtqichen/residual-flows
 
-
 class Residual(Flow):
     """
-    Invertible residual net block, wrapper to the implementation of Chen et al.,
-    see [sources](https://github.com/rtqichen/residual-flows)
+    Invertible residual net block (Optimized with deterministic power series truncation)
     """
 
     def __init__(
@@ -20,44 +18,29 @@ class Residual(Flow):
         net,
         reverse=True,
         reduce_memory=True,
-        geom_p=0.5,
-        lamb=2.0,
-        n_power_series=None,
+        n_power_series=5,
         exact_trace=False,
         brute_force=False,
-        n_samples=1,
-        n_exact_terms=2,
-        n_dist="geometric"
     ):
         """Constructor
 
         Args:
           net: Neural network, must be Lipschitz continuous with L < 1
-          reverse: Flag, if true the map ```f(x) = x + net(x)``` is applied in the inverse pass, otherwise it is done in forward
-          reduce_memory: Flag, if true Neumann series and precomputations, for backward pass in forward pass are done
-          geom_p: Parameter of the geometric distribution used for the Neumann series
-          lamb: Parameter of the geometric distribution used for the Neumann series
-          n_power_series: Number of terms in the Neumann series
+          reverse: Flag, if true the map ```f(x) = x + net(x)``` is applied in the inverse pass
+          reduce_memory: Flag, if true Neumann series and precomputations are memory-efficient
+          n_power_series: Fixed number of terms in the Neumann power series (Deterministic)
           exact_trace: Flag, if true the trace of the Jacobian is computed exactly
           brute_force: Flag, if true the Jacobian is computed exactly in 2D
-          n_samples: Number of samples used to estimate power series
-          n_exact_terms: Number of terms always included in the power series
-          n_dist: Distribution used for the power series, either "geometric" or "poisson"
         """
         super().__init__()
         self.reverse = reverse
         self.iresblock = iResBlock(
             net,
-            n_samples=n_samples,
-            n_exact_terms=n_exact_terms,
+            n_power_series=n_power_series,
+            exact_trace=exact_trace,
+            brute_force=brute_force,
             neumann_grad=reduce_memory,
             grad_in_forward=reduce_memory,
-            exact_trace=exact_trace,
-            geom_p=geom_p,
-            lamb=lamb,
-            n_power_series=n_power_series,
-            brute_force=brute_force,
-            n_dist=n_dist,
         )
 
     def forward(self, z):
@@ -79,41 +62,19 @@ class iResBlock(nn.Module):
     def __init__(
         self,
         nnet,
-        geom_p=0.5,
-        lamb=2.0,
-        n_power_series=None,
+        n_power_series=5,
         exact_trace=False,
         brute_force=False,
-        n_samples=1,
-        n_exact_terms=2,
-        n_dist="geometric",
         neumann_grad=True,
         grad_in_forward=False,
     ):
-        """
-        Args:
-            nnet: a nn.Module
-            n_power_series: number of power series. If not None, uses a biased approximation to logdet.
-            exact_trace: if False, uses a Hutchinson trace estimator. Otherwise computes the exact full Jacobian.
-            brute_force: Computes the exact logdet. Only available for 2D inputs.
-        """
         nn.Module.__init__(self)
         self.nnet = nnet
-        self.n_dist = n_dist
-        self.geom_p = nn.Parameter(torch.tensor(np.log(geom_p) - np.log(1.0 - geom_p)))
-        self.lamb = nn.Parameter(torch.tensor(lamb))
-        self.n_samples = n_samples
         self.n_power_series = n_power_series
         self.exact_trace = exact_trace
         self.brute_force = brute_force
-        self.n_exact_terms = n_exact_terms
         self.grad_in_forward = grad_in_forward
         self.neumann_grad = neumann_grad
-
-        # store the samples of n.
-        self.register_buffer("last_n_samples", torch.zeros(self.n_samples))
-        self.register_buffer("last_firmom", torch.zeros(1))
-        self.register_buffer("last_secmom", torch.zeros(1))
 
     def forward(self, x, logpx=None):
         if logpx is None:
@@ -153,49 +114,15 @@ class iResBlock(nn.Module):
                 ###########################################
                 x = x.requires_grad_(True)
                 g = self.nnet(x)
-                # Brute-force logdet only available for 2D.
                 jac = batch_jacobian(g, x)
                 batch_dets = (jac[:, 0, 0] + 1) * (jac[:, 1, 1] + 1) - jac[
                     :, 0, 1
                 ] * jac[:, 1, 0]
                 return g, torch.log(torch.abs(batch_dets)).view(-1, 1)
 
-            if self.n_dist == "geometric":
-                geom_p = torch.sigmoid(self.geom_p).item()
-                sample_fn = lambda m: geometric_sample(geom_p, m)
-                rcdf_fn = lambda k, offset: geometric_1mcdf(geom_p, k, offset)
-            elif self.n_dist == "poisson":
-                lamb = self.lamb.item()
-                sample_fn = lambda m: poisson_sample(lamb, m)
-                rcdf_fn = lambda k, offset: poisson_1mcdf(lamb, k, offset)
-
-            if self.training:
-                if self.n_power_series is None:
-                    # Unbiased estimation.
-                    lamb = self.lamb.item()
-                    n_samples = sample_fn(self.n_samples)
-                    n_power_series = max(n_samples) + self.n_exact_terms
-                    coeff_fn = (
-                        lambda k: 1
-                        / rcdf_fn(k, self.n_exact_terms)
-                        * sum(n_samples >= k - self.n_exact_terms)
-                        / len(n_samples)
-                    )
-                else:
-                    # Truncated estimation.
-                    n_power_series = self.n_power_series
-                    coeff_fn = lambda k: 1.0
-            else:
-                # Unbiased estimation with more exact terms.
-                lamb = self.lamb.item()
-                n_samples = sample_fn(self.n_samples)
-                n_power_series = max(n_samples) + 20
-                coeff_fn = (
-                    lambda k: 1
-                    / rcdf_fn(k, 20)
-                    * sum(n_samples >= k - 20)
-                    / len(n_samples)
-                )
+            # OPTIMISATION GB-3 : Troncature déterministe
+            n_power_series = self.n_power_series
+            coeff_fn = lambda k: 1.0
 
             if not self.exact_trace:
                 ####################################
@@ -203,13 +130,11 @@ class iResBlock(nn.Module):
                 ####################################
                 vareps = torch.randn_like(x)
 
-                # Choose the type of estimator.
                 if self.training and self.neumann_grad:
                     estimator_fn = neumann_logdet_estimator
                 else:
                     estimator_fn = basic_logdet_estimator
 
-                # Do backprop-in-forward to save memory.
                 if self.training and self.grad_in_forward:
                     g, logdetgrad = mem_eff_wrapper(
                         estimator_fn,
@@ -237,29 +162,17 @@ class iResBlock(nn.Module):
                 jac_k = jac
                 for k in range(2, n_power_series + 1):
                     jac_k = torch.bmm(jac, jac_k)
-                    logdetgrad = logdetgrad + (-1) ** (k + 1) / k * coeff_fn(
-                        k
-                    ) * batch_trace(jac_k)
+                    logdetgrad = logdetgrad + (-1) ** (k + 1) / k * batch_trace(jac_k)
 
-            if self.training and self.n_power_series is None:
-                self.last_n_samples.copy_(
-                    torch.tensor(n_samples).to(self.last_n_samples)
-                )
-                estimator = logdetgrad.detach()
-                self.last_firmom.copy_(torch.mean(estimator).to(self.last_firmom))
-                self.last_secmom.copy_(torch.mean(estimator**2).to(self.last_secmom))
             return g, logdetgrad.view(-1, 1)
 
     def extra_repr(self):
-        return "dist={}, n_samples={}, n_power_series={}, neumann_grad={}, exact_trace={}, brute_force={}".format(
-            self.n_dist,
-            self.n_samples,
+        return "n_power_series={}, neumann_grad={}, exact_trace={}, brute_force={}".format(
             self.n_power_series,
             self.neumann_grad,
             self.exact_trace,
             self.brute_force,
         )
-
 
 def batch_jacobian(g, x):
     jac = []

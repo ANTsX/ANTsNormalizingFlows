@@ -178,6 +178,10 @@ class CoreTest(unittest.TestCase):
                 model = MultiscaleFlow(base, flows, merges)
                 # Test model
                 y = torch.randint(num_classes, (batch_size,))
+
+                dummy_x = torch.randn(batch_size, *input_shape)
+                _ = model.inverse_and_log_det(dummy_x)
+                
                 x, log_q = model.sample(batch_size, y)
                 log_q_ = model.log_prob(x, y)
                 assert x.shape == (batch_size,) + (input_shape)
