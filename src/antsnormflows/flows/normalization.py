@@ -9,7 +9,7 @@ class ActNorm(AffineConstFlow):
     """
     Glow-style ActNorm with data-dependent init.
     Numerics: (a) bound log-scale, (b) FP32 exp/logdet, (c) correct init flag handling.
-    Works for N,C,*spatial (2D, 3D, ...).
+    Works for ``N, C, *spatial`` (2D, 3D, ...).
     """
 
     def __init__(self, *args, log_s_cap: float = 5.0, **kwargs):
@@ -101,7 +101,8 @@ class ActNorm(AffineConstFlow):
 class BatchNorm(Flow):
     """
     RealNVP-style BatchNorm that ignores gradients through batch stats.
-    Works for inputs shaped (N, C, *spatial). Computes per-channel stats over batch+spatial.
+    Works for inputs shaped ``(N, C, *spatial)``. Computes per-channel stats over
+    batch and spatial dimensions.
     """
 
     def __init__(self, eps: float = 1e-6, detach_stats: bool = True):
