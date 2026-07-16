@@ -1,10 +1,12 @@
 # ANTsNormalizingFlows
 
+[![Test coverage](https://raw.githubusercontent.com/ANTsX/ANTsNormalizingFlows/coverage-badge/coverage.svg)](https://github.com/ANTsX/ANTsNormalizingFlows/actions/workflows/pytest.yaml)
+
 An updated PyTorch package (from
 [normflows](https://github.com/VincentStimper/normalizing-flows)) for discrete normalizing
 flows.
 
-<!-- 
+<!--
 ## Installation
 
 Requires Python ≥ 3.10 and a working PyTorch installation (GPU optional).

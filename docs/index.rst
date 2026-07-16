@@ -5,6 +5,10 @@ ANTsNormalizingFlows is an updated PyTorch package for discrete normalizing
 flows, based on the `normflows project
 <https://github.com/VincentStimper/normalizing-flows>`_.
 
+.. image:: https://raw.githubusercontent.com/ANTsX/ANTsNormalizingFlows/coverage-badge/coverage.svg
+   :alt: Test coverage
+   :target: https://github.com/ANTsX/ANTsNormalizingFlows/actions/workflows/pytest.yaml
+
 Quick start
 -----------
 
