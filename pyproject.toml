@@ -34,6 +34,7 @@ test = ["pytest>=8.0", "pytest-cov>=4.1", "hypothesis>=6.0", "matplotlib"]
 dev  = ["black>=24.0", "ruff>=0.6.0", "mypy>=1.8", "pre-commit>=3.6", "build>=1.2.1", "twine>=5.0"]
 docs = [
   "sphinx>=7.2",
+  "sphinx-design>=0.6",
   "sphinx-rtd-theme>=2.0",
 ]
 
