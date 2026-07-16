@@ -32,7 +32,10 @@ Issues     = "https://github.com/ANTsX/ANTsNormalizingFlows/issues"
 # pip install -e .[test], .[dev], .[docs], .[examples]
 test = ["pytest>=8.0", "pytest-cov>=4.1", "hypothesis>=6.0", "matplotlib"]
 dev  = ["black>=24.0", "ruff>=0.6.0", "mypy>=1.8", "pre-commit>=3.6", "build>=1.2.1", "twine>=5.0"]
-docs = ["mkdocs>=1.5", "mkdocs-material>=9.5"]
+docs = [
+  "sphinx>=7.2",
+  "sphinx-rtd-theme>=2.0",
+]
 
 [tool.setuptools]
 zip-safe = false
