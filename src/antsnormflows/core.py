@@ -6,7 +6,7 @@ import numpy as np
 from . import distributions
 from . import utils
 
-from torch.utils.checkpoint import checkpoint
+import torch.utils.checkpoint as checkpoint
 
 class NormalizingFlow(nn.Module):
     """
