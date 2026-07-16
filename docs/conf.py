@@ -17,6 +17,7 @@ release = antsnormflows.__version__
 version = release
 
 extensions = [
+    "sphinx_design",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.napoleon",
