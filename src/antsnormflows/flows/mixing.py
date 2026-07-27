@@ -339,7 +339,7 @@ class _Permutation(Flow):
             )
         batch_size = inputs.shape[0]
         outputs = torch.index_select(inputs, dim, permutation)
-        logabsdet = torch.zeros(batch_size)
+        logabsdet = torch.zeros(batch_size, dtype=inputs.dtype, device=inputs.device)
         return outputs, logabsdet
 
     def forward(self, inputs, context=None):
@@ -390,7 +390,9 @@ class _Linear(Flow):
         if not self.training and self.using_cache:
             self._check_forward_cache()
             outputs = F.linear(inputs, self.cache.weight, self.bias)
-            logabsdet = self.cache.logabsdet * torch.ones(outputs.shape[0])
+            logabsdet = self.cache.logabsdet * torch.ones(
+                outputs.shape[0], dtype=outputs.dtype, device=outputs.device
+            )
             return outputs, logabsdet
         else:
             return self.forward_no_cache(inputs)
@@ -409,7 +411,9 @@ class _Linear(Flow):
         if not self.training and self.using_cache:
             self._check_inverse_cache()
             outputs = F.linear(inputs - self.bias, self.cache.inverse)
-            logabsdet = (-self.cache.logabsdet) * torch.ones(outputs.shape[0])
+            logabsdet = (-self.cache.logabsdet) * torch.ones(
+                outputs.shape[0], dtype=outputs.dtype, device=outputs.device
+            )
             return outputs, logabsdet
         else:
             return self.inverse_no_cache(inputs)
@@ -560,7 +564,7 @@ class _LULinear(_Linear):
             outputs = torch.linalg.solve_triangular(
                 upper, outputs, upper=True, unitriangular=False
             )
-        except:
+        except AttributeError:  # older PyTorch without torch.linalg.solve_triangular
             outputs, _ = torch.triangular_solve(
                 outputs.t(), lower, upper=False, unitriangular=True
             )
@@ -606,7 +610,7 @@ class _LULinear(_Linear):
         ```
         """
         lower, upper = self._create_lower_upper()
-        identity = torch.eye(self.features, self.features)
+        identity = torch.eye(self.features, self.features, dtype=lower.dtype, device=lower.device)
         lower_inverse = torch.linalg.solve_triangular(lower, identity, upper=False, unitriangular=True)
         weight_inverse = torch.linalg.solve_triangular(
             upper, lower_inverse, upper=True, unitriangular=False

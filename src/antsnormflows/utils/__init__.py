@@ -11,6 +11,12 @@ from .eval import bitsPerDim, bitsPerDimDataset
 
 from .nn import ActNorm, ClampExp, ConstScaleLayer, tile, sum_except_batch
 
-from .optim import clear_grad, set_requires_grad, update_lipschitz
+from .optim import (
+    clear_grad,
+    get_requires_grad_states,
+    restore_requires_grad,
+    set_requires_grad,
+    update_lipschitz,
+)
 
 from .preprocessing import Logit, Jitter, Scale

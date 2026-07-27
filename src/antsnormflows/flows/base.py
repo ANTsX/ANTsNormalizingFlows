@@ -63,7 +63,7 @@ class Composite(Flow):
     def _cascade(inputs, funcs):
         batch_size = inputs.shape[0]
         outputs = inputs
-        total_logabsdet = torch.zeros(batch_size)
+        total_logabsdet = torch.zeros(batch_size, dtype=inputs.dtype, device=inputs.device)
         for func in funcs:
             outputs, logabsdet = func(outputs)
             total_logabsdet += logabsdet

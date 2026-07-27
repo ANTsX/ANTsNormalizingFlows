@@ -1,4 +1,7 @@
-class LinearInterpolation:
+from torch import nn
+
+
+class LinearInterpolation(nn.Module):
     """
     Linear interpolation of two distributions in the log space
     """
@@ -17,6 +20,7 @@ class LinearInterpolation:
           dist2: Second distribution
           alpha: Interpolation parameter
         """
+        super().__init__()
         self.alpha = alpha
         self.dist1 = dist1
         self.dist2 = dist2

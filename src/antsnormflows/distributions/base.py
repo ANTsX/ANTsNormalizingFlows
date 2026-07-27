@@ -116,6 +116,13 @@ class ConditionalDiagGaussian(BaseDistribution):
     """
     Conditional multivariate diagonal Gaussian;
     mean and log sigma are produced by a context encoder.
+
+    Note:
+      There is an unrelated class of the same name,
+      `antsnormflows.distributions.target.ConditionalDiagGaussian`, meant to
+      be used as a target distribution `p` (its `context` is directly the
+      concatenated `[loc, scale]`, not passed through a network). They are
+      not interchangeable - double check which one you imported.
     """
 
     def __init__(self, shape, context_encoder, min_log=-5.0, max_log=5.0):
@@ -167,6 +174,14 @@ class ConditionalDiagGaussian(BaseDistribution):
 class Uniform(BaseDistribution):
     """
     Multivariate uniform distribution over [low, high].
+
+    Note:
+      `antsnormflows.distributions.Uniform` (the package-level import)
+      resolves to `encoder.Uniform`, a *conditional* VAE-encoder-style
+      distribution with a different constructor/call signature - not this
+      class. Import this one explicitly via
+      `antsnormflows.distributions.base.Uniform` if you need the plain
+      (unconditional) base distribution.
     """
 
     def __init__(self, shape, low=-1.0, high=1.0):
@@ -516,6 +531,7 @@ class GaussianMixture(BaseDistribution):
 
     def forward(self, num_samples=1):
         weights = torch.softmax(self.weight_scores, dim=1)
+        log_weights = F.log_softmax(self.weight_scores, dim=1)
         mode = torch.multinomial(weights[0, :], num_samples, replacement=True)
         mode_1h = F.one_hot(mode, self.n_modes)[..., None].to(dtype=self.loc.dtype, device=self.loc.device)
 
@@ -527,7 +543,7 @@ class GaussianMixture(BaseDistribution):
         eps_all = (z[:, None, :] - self.loc) / torch.exp(self._clamped_logs())
         log_p = (
             -0.5 * self.dim * np.log(2 * np.pi)
-            + torch.log(weights)
+            + log_weights
             - 0.5 * torch.sum(eps_all.pow(2), 2)
             - torch.sum(self._clamped_logs(), 2)
         )
@@ -535,11 +551,11 @@ class GaussianMixture(BaseDistribution):
         return z, log_p
 
     def log_prob(self, z):
-        weights = torch.softmax(self.weight_scores, dim=1)
+        log_weights = F.log_softmax(self.weight_scores, dim=1)
         eps = (z[:, None, :] - self.loc) / torch.exp(self._clamped_logs())
         log_p = (
             -0.5 * self.dim * np.log(2 * np.pi)
-            + torch.log(weights)
+            + log_weights
             - 0.5 * torch.sum(eps.pow(2), 2)
             - torch.sum(self._clamped_logs(), 2)
         )
@@ -589,6 +605,12 @@ class GaussianPCA(BaseDistribution):
                 break
             except RuntimeError:
                 jitter *= 10.0
+        else:
+            raise RuntimeError(
+                "GaussianPCA.forward: Cholesky decomposition failed to converge "
+                f"after 5 jitter escalations (final jitter={jitter}); the covariance "
+                "W^T W + sigma^2 I may be severely ill-conditioned."
+            )
         # slogdet from Cholesky: logdet = 2 * sum(log(diag(L)))
         logdet = 2.0 * torch.sum(torch.log(torch.diag(L)))
         # Quadratic form: solve L y = (z - loc)^T; then ||y||^2
@@ -609,6 +631,12 @@ class GaussianPCA(BaseDistribution):
                 break
             except RuntimeError:
                 jitter *= 10.0
+        else:
+            raise RuntimeError(
+                "GaussianPCA.log_prob: Cholesky decomposition failed to converge "
+                f"after 5 jitter escalations (final jitter={jitter}); the covariance "
+                "W^T W + sigma^2 I may be severely ill-conditioned."
+            )
         logdet = 2.0 * torch.sum(torch.log(torch.diag(L)))
         y = torch.cholesky_solve(diff.t(), L)
         quad = 0.5 * torch.sum(diff.t() * y, dim=0)

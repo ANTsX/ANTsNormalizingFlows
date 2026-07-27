@@ -202,6 +202,13 @@ class ConditionalDiagGaussian(Target):
 
     The first half of the entries of the condition, also called context,
     are the mean, while the second half are the standard deviation.
+
+    Note:
+      There is an unrelated class of the same name,
+      `antsnormflows.distributions.base.ConditionalDiagGaussian`, meant to
+      be used as a base/q0 distribution whose `context` is passed through a
+      learned `context_encoder` network. They are not interchangeable -
+      double check which one you imported.
     """
     def log_prob(self, z, context=None):
         d = z.shape[-1]
