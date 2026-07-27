@@ -77,7 +77,6 @@ class MaskedAffineAutoregressive(Autoregressive):
           dropout_probability: Dropout probability in the MADE network
           use_batch_norm: Flag whether batch normalization should be used
         """
-        self.features = features
         made = made_module.MADE(
             features=features,
             hidden_features=hidden_features,
@@ -91,6 +90,10 @@ class MaskedAffineAutoregressive(Autoregressive):
             use_batch_norm=use_batch_norm,
         )
         super(MaskedAffineAutoregressive, self).__init__(made)
+        # features must be set after super().__init__() (which calls
+        # nn.Module.__init__() via Autoregressive/Flow) so that nn.Module's
+        # attribute-registration machinery is initialized first.
+        self.features = features
 
     def _output_dim_multiplier(self):
         return 2
