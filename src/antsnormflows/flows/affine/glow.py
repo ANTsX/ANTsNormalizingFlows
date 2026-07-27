@@ -21,8 +21,18 @@ class GlowBlock2d(Flow):
         init_zeros=True,
         use_lu=True,
         net_actnorm=True,
-        s_cap=2.0
+        s_cap=2.0,
+        conv_s_cap=None
     ):
+        """
+        conv_s_cap: optional override for the Invertible1x1Conv's own log-scale
+        clamp. If None (default), the conv uses `s_cap` (matching the caller's
+        requested scale_cap). Pass an explicit value (e.g. 2.5) to reproduce
+        the pre-fix behavior for checkpoints trained before the invertible
+        conv correctly received `s_cap` -- those checkpoints' weights were
+        calibrated against the conv's old hardcoded default, not against the
+        configured `scale_cap`.
+        """
         super().__init__()
         self.flows = nn.ModuleList([])
         self.channels = channels
@@ -50,8 +60,12 @@ class GlowBlock2d(Flow):
         if channels > 1:
             # Pass s_cap through so the invertible 1x1 conv's log-scale clamp
             # matches the caller's requested scale_cap instead of silently
-            # using Invertible1x1Conv's own hardcoded default (2.5).
-            self.flows.append(Invertible1x1Conv(channels, use_lu, s_cap=s_cap))
+            # using Invertible1x1Conv's own hardcoded default (2.5), unless
+            # conv_s_cap explicitly overrides it (legacy-checkpoint mode).
+            self.flows.append(Invertible1x1Conv(
+                channels, use_lu,
+                s_cap=(conv_s_cap if conv_s_cap is not None else s_cap),
+            ))
         self.flows.append(AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap))
 
     def forward(self, z):
@@ -94,7 +108,8 @@ class GlowBlock3d(Flow):
         init_zeros=True,
         use_lu=True,
         net_actnorm=True,
-        s_cap=2.0
+        s_cap=2.0,
+        conv_s_cap=None
     ):
         """Constructor
 
@@ -108,6 +123,10 @@ class GlowBlock3d(Flow):
           init_zeros: Flag whether to initialize last conv layer with zeros
           use_lu: Flag whether to parametrize weights through the LU decomposition in invertible 1x1 convolution layers
           logscale_factor: Factor which can be used to control the scale of the log scale factor, see [source](https://github.com/openai/glow)
+          conv_s_cap: optional override for the Invertible1x1x1Conv's own log-scale
+            clamp. If None (default), the conv uses `s_cap`. Pass an explicit
+            value (e.g. 2.5) to reproduce the pre-fix behavior for checkpoints
+            trained before the invertible conv correctly received `s_cap`.
         """
         super().__init__()
         self.flows = nn.ModuleList([])
@@ -133,8 +152,12 @@ class GlowBlock3d(Flow):
         if channels > 1:
             # Pass s_cap through so the invertible 1x1x1 conv's log-scale
             # clamp matches the caller's requested scale_cap instead of
-            # silently using Invertible1x1x1Conv's own hardcoded default (2.5).
-            self.flows += [Invertible1x1x1Conv(channels, use_lu, s_cap=s_cap)]
+            # silently using Invertible1x1x1Conv's own hardcoded default (2.5),
+            # unless conv_s_cap explicitly overrides it (legacy-checkpoint mode).
+            self.flows += [Invertible1x1x1Conv(
+                channels, use_lu,
+                s_cap=(conv_s_cap if conv_s_cap is not None else s_cap),
+            )]
         self.flows += [AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap)]
 
     def forward(self, z):
