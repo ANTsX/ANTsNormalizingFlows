@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from .base import Flow
+from .base import Flow, zero_log_det_like_z
 
 
 # Flow layers to reshape the latent features
@@ -42,7 +42,7 @@ class Split(Flow):
             )
         else:
             raise NotImplementedError("Mode " + self.mode + " is not implemented.")
-        log_det = 0
+        log_det = zero_log_det_like_z(z)
         return [z1, z2], log_det
 
     def inverse(self, z):
@@ -70,7 +70,7 @@ class Split(Flow):
             z = cb * z1 + (1 - cb) * z2
         else:
             raise NotImplementedError("Mode " + self.mode + " is not implemented.")
-        log_det = 0
+        log_det = zero_log_det_like_z(z)
         return z, log_det
 
 
@@ -101,19 +101,19 @@ class Squeeze2d(Flow):
         super().__init__()
 
     def forward(self, z):
-        log_det = 0
         s = z.size()
         z = z.view(s[0], s[1] // 4, 2, 2, s[2], s[3])
         z = z.permute(0, 1, 4, 2, 5, 3).contiguous()
         z = z.view(s[0], s[1] // 4, 2 * s[2], 2 * s[3])
+        log_det = zero_log_det_like_z(z)
         return z, log_det
 
     def inverse(self, z):
-        log_det = 0
         s = z.size()
         z = z.view(s[0], s[1], s[2] // 2, 2, s[3] // 2, 2)
         z = z.permute(0, 1, 3, 5, 2, 4).contiguous()
         z = z.view(s[0], 4 * s[1], s[2] // 2, s[3] // 2)
+        log_det = zero_log_det_like_z(z)
         return z, log_det
 
 class Squeeze3d(Flow):
@@ -128,18 +128,18 @@ class Squeeze3d(Flow):
         super().__init__()
 
     def forward(self, z):
-        log_det = 0
         s = z.size()
         z = z.view(s[0], s[1] // 8, 2, 2, 2, s[2], s[3], s[4])
         z = z.permute(0, 1, 5, 2, 6, 3, 7, 4).contiguous()
         z = z.view(s[0], s[1] // 8, s[2] * 2, s[3] * 2, s[4] * 2)
+        log_det = zero_log_det_like_z(z)
         return z, log_det
 
     def inverse(self, z):
-        log_det = 0
         s = z.size()
         z = z.view(s[0], s[1], s[2] // 2, 2, s[3] // 2, 2, s[4] // 2, 2)
         z = z.permute(0, 1, 3, 5, 7, 2, 4, 6).contiguous()
         z = z.view(s[0], 8 * s[1], s[2] // 2, s[3] // 2, s[4] // 2)
+        log_det = zero_log_det_like_z(z)
         return z, log_det
     

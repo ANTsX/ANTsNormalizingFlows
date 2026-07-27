@@ -13,6 +13,35 @@ def set_requires_grad(module, flag):
         param.requires_grad = flag
 
 
+def get_requires_grad_states(module):
+    """Snapshots the current requires_grad flag of every parameter
+
+    Use together with `restore_requires_grad` to temporarily toggle
+    requires_grad (e.g. to disable gradient tracking through part of a
+    forward pass) without permanently clobbering parameters that were
+    frozen on purpose beforehand.
+
+    Args:
+      module: torch.nn.module
+
+    Returns:
+      List of booleans, one per parameter (in `module.parameters()` order)
+    """
+    return [param.requires_grad for param in module.parameters()]
+
+
+def restore_requires_grad(module, states):
+    """Restores requires_grad flags previously captured with
+    `get_requires_grad_states`
+
+    Args:
+      module: torch.nn.module
+      states: List of booleans returned by `get_requires_grad_states`
+    """
+    for param, state in zip(module.parameters(), states):
+        param.requires_grad = state
+
+
 def clear_grad(model):
     """Set gradients of model parameter to None as this speeds up training,
 

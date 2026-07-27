@@ -64,13 +64,13 @@ class Shift(flows.Flow):
         self.shift = shift
 
     def forward(self, z):
-        z -= self.shift
+        z = z - self.shift
         log_det = torch.zeros(z.shape[0], dtype=z.dtype,
                               device=z.device)
         return z, log_det
 
     def inverse(self, z):
-        z += self.shift
+        z = z + self.shift
         log_det = torch.zeros(z.shape[0], dtype=z.dtype,
                               device=z.device)
         return z, log_det

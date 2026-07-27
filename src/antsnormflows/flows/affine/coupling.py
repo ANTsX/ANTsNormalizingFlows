@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from ..base import Flow, zero_log_det_like_z
+from ..base import Flow, zero_log_det_like_z, stable_fp_dtype
 from ..reshape import Split, Merge
 
 # -----------------------------------------------------------------------------
@@ -164,19 +164,19 @@ class AffineCoupling(Flow):
             reduce_dims = list(range(1, shift.dim()))
 
             if self.scale_map in ("exp", "tanh"):
-                log_s32 = scale_.float()
+                log_s32 = scale_.to(stable_fp_dtype(scale_))
                 with torch.amp.autocast('cuda', enabled=False):
                     s32 = torch.exp(log_s32)
                 z2 = z2 * s32.to(z2.dtype) + shift
                 log_det = torch.sum(log_s32, dim=reduce_dims).to(z2.dtype)
 
             elif self.scale_map == "sigmoid":
-                scale32 = torch.sigmoid((scale_ + 2).float())
+                scale32 = torch.sigmoid((scale_ + 2).to(stable_fp_dtype(scale_)))
                 z2 = z2 / scale32.to(z2.dtype) + shift
                 log_det = -torch.sum(torch.log(scale32), dim=reduce_dims).to(z2.dtype)
 
             elif self.scale_map == "sigmoid_inv":
-                scale32 = torch.sigmoid((scale_ + 2).float())
+                scale32 = torch.sigmoid((scale_ + 2).to(stable_fp_dtype(scale_)))
                 z2 = z2 * scale32.to(z2.dtype) + shift
                 log_det = torch.sum(torch.log(scale32), dim=reduce_dims).to(z2.dtype)
 
@@ -198,19 +198,19 @@ class AffineCoupling(Flow):
             reduce_dims = list(range(1, shift.dim()))
 
             if self.scale_map in ("exp", "tanh"):
-                log_s32 = scale_.float()
+                log_s32 = scale_.to(stable_fp_dtype(scale_))
                 with torch.amp.autocast('cuda', enabled=False):
                     inv_s32 = torch.exp(-log_s32)
                 z2 = (z2 - shift) * inv_s32.to(z2.dtype)
                 log_det = -torch.sum(log_s32, dim=reduce_dims).to(z2.dtype)
 
             elif self.scale_map == "sigmoid":
-                scale32 = torch.sigmoid((scale_ + 2).float())
+                scale32 = torch.sigmoid((scale_ + 2).to(stable_fp_dtype(scale_)))
                 z2 = (z2 - shift) * scale32.to(z2.dtype)
                 log_det = torch.sum(torch.log(scale32), dim=reduce_dims).to(z2.dtype)
 
             elif self.scale_map == "sigmoid_inv":
-                scale32 = torch.sigmoid((scale_ + 2).float())
+                scale32 = torch.sigmoid((scale_ + 2).to(stable_fp_dtype(scale_)))
                 z2 = (z2 - shift) / scale32.to(z2.dtype)
                 log_det = -torch.sum(torch.log(scale32), dim=reduce_dims).to(z2.dtype)
 

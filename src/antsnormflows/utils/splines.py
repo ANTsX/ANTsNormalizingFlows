@@ -12,12 +12,15 @@ DEFAULT_MIN_DERIVATIVE = 1e-3
 
 import os
 
-# Ne compiler que si on n'est pas dans l'environnement CI
-if os.environ.get("CI") == "true":
+# torch.compile is opt-in: it changes runtime behavior (compilation overhead,
+# possible recompilation, backend-specific edge cases) enough that a library
+# should not silently enable it for every environment except CI. Set
+# ANTSNF_TORCH_COMPILE=1 to enable compilation of the spline functions below.
+if os.environ.get("ANTSNF_TORCH_COMPILE") == "1":
+    conditional_compile = torch.compile
+else:
     def conditional_compile(fn):
         return fn
-else:
-    conditional_compile = torch.compile
 
 @conditional_compile
 def search_sorted(bin_locations: torch.Tensor, inputs: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -182,7 +185,14 @@ def rational_quadratic_spline(
         c = -input_delta * (inputs - input_cumheights)
 
         discriminant = b.pow(2) - 4 * a * c
-        assert (discriminant >= 0).all()
+        if not bool((discriminant >= 0).all()):
+            # `assert` is stripped under `python -O`, so this numerical
+            # precondition is checked explicitly instead.
+            raise RuntimeError(
+                "rational_quadratic_spline: negative discriminant encountered "
+                "while inverting the spline; inputs may be outside the valid "
+                "range or bin parameters are degenerate."
+            )
 
         root = (2 * c) / (-b - torch.sqrt(discriminant))
         outputs = root * input_bin_widths + input_cumwidths

@@ -42,15 +42,25 @@ class Dirac(BaseEncoder):
 
     def forward(self, x, num_samples=1):
         z = x.unsqueeze(1).repeat(1, num_samples, 1)
-        log_q = torch.zeros(z.size()[0:2])
+        log_q = torch.zeros(z.size()[0:2], dtype=z.dtype, device=z.device)
         return z, log_q
 
     def log_prob(self, z, x):
-        log_q = torch.zeros(z.size()[0:2])
+        log_q = torch.zeros(z.size()[0:2], dtype=z.dtype, device=z.device)
         return log_q
 
 
 class Uniform(BaseEncoder):
+    """Conditional (VAE-encoder-style) uniform distribution.
+
+    Note:
+      This is the class `antsnormflows.distributions.Uniform` resolves to
+      at the package level. There is an unrelated, unconditional
+      `antsnormflows.distributions.base.Uniform` base distribution with a
+      different constructor/call signature - import it explicitly if
+      that's the one you need.
+    """
+
     def __init__(self, zmin=0.0, zmax=1.0):
         super().__init__()
         self.zmin = zmin
@@ -63,11 +73,11 @@ class Uniform(BaseEncoder):
             .repeat(1, num_samples, 1)
             .uniform_(self.zmin, self.zmax)
         )
-        log_q = torch.zeros(z.size()[0:2]).fill_(self.log_q)
+        log_q = torch.zeros(z.size()[0:2], dtype=z.dtype, device=z.device).fill_(self.log_q)
         return z, log_q
 
     def log_prob(self, z, x):
-        log_q = torch.zeros(z.size()[0:2]).fill_(self.log_q)
+        log_q = torch.zeros(z.size()[0:2], dtype=z.dtype, device=z.device).fill_(self.log_q)
         return log_q
 
 
@@ -101,7 +111,9 @@ class ConstDiagGaussian(BaseEncoder):
             batch_size = len(x)
         else:
             batch_size = 1
-        eps = torch.randn((batch_size, num_samples, self.d), device=x.device)
+        eps = torch.randn(
+            (batch_size, num_samples, self.d), dtype=self.loc.dtype, device=self.loc.device
+        )
         z = self.loc + self.scale * eps
         log_q = -0.5 * self.d * np.log(2 * np.pi) - torch.sum(
             torch.log(self.scale) + 0.5 * torch.pow(eps, 2), 2

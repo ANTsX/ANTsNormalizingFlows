@@ -3,17 +3,67 @@ import torch.nn as nn
 import contextlib
 import numpy as np
 
+from typing import List, Optional, Sequence, Tuple
+
 from . import distributions
 from . import utils
+from .flows.base import stable_fp_dtype
 
 import torch.utils.checkpoint as checkpoint
+
+
+def _apply_flow_sequence(flows, z, call_flow, reverse=False, use_checkpoint=False,
+                          checkpoint_args=()):
+    """Applies a sequence of flows (or their inverse) to a batch, accumulating
+    the total log-determinant at a stable floating-point precision (at least
+    float32; float64 is preserved if `z` is already double precision -- see
+    `stable_fp_dtype`).
+
+    Factors out the checkpointing/accumulation logic shared by
+    `NormalizingFlow` and `ConditionalNormalizingFlow`'s
+    `forward_and_log_det`/`inverse_and_log_det` methods.
+
+    Args:
+      flows: nn.ModuleList of flows
+      z: Batch to transform
+      call_flow: Callable(flow, z, *checkpoint_args) -> (new_z, log_det)
+        that invokes `flow`/`flow.inverse` with whatever extra arguments
+        it needs (e.g. context)
+      reverse: Iterate the flows back-to-front (used for the inverse
+        direction)
+      use_checkpoint: Wrap each flow call in `torch.utils.checkpoint` to
+        trade compute for memory
+      checkpoint_args: Extra tensor arguments (e.g. context) forwarded to
+        `call_flow`. Passed explicitly through `checkpoint.checkpoint` (as
+        opposed to only via closure) so that gradients w.r.t. these
+        tensors are tracked correctly when checkpointing is enabled.
+
+    Returns:
+      Tuple of (transformed batch, total log-determinant)
+    """
+    accum_dtype = stable_fp_dtype(z)
+    log_det = torch.zeros(len(z), device=z.device, dtype=accum_dtype)
+    indices = range(len(flows) - 1, -1, -1) if reverse else range(len(flows))
+
+    for i in indices:
+        flow = flows[i]
+        if use_checkpoint:
+            def _run(latent, *extra, f=flow):
+                return call_flow(f, latent, *extra)
+            z, log_d = checkpoint.checkpoint(_run, z, *checkpoint_args, use_reentrant=False)
+        else:
+            z, log_d = call_flow(flow, z, *checkpoint_args)
+        log_det += log_d.to(accum_dtype)
+
+    return z, log_det
+
 
 class NormalizingFlow(nn.Module):
     """
     Normalizing Flow model to approximate target distribution
     """
 
-    def __init__(self, q0, flows, p=None):
+    def __init__(self, q0: nn.Module, flows: Sequence[nn.Module], p: Optional[nn.Module] = None):
         """Constructor
 
         Args:
@@ -22,12 +72,20 @@ class NormalizingFlow(nn.Module):
           p: Target distribution
         """
         super().__init__()
+        if q0 is None:
+            raise ValueError("NormalizingFlow: q0 (base distribution) must not be None")
         self.q0 = q0
         self.flows = nn.ModuleList(flows)
         self.p = p
 
-    def forward(self, z):
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
         """Transforms latent variable z to the flow variable x
+
+        Note:
+          Calling the model as `model(z)` performs this z -> x transform;
+          it does NOT compute a training loss. This differs from
+          `MultiscaleFlow.forward`, which returns a negative
+          log-likelihood. Use `forward_kld`/`reverse_kld` for losses.
 
         Args:
           z: Batch in the latent space
@@ -39,7 +97,7 @@ class NormalizingFlow(nn.Module):
             z, _ = flow(z)
         return z
 
-    def inverse(self, x):
+    def inverse(self, x: torch.Tensor) -> torch.Tensor:
         """Transforms flow variable x to the latent variable z
 
         Args:
@@ -58,20 +116,15 @@ class NormalizingFlow(nn.Module):
         else:
             ctx = contextlib.nullcontext()
 
-        with ctx:
-            log_det = torch.zeros(len(z), device=z.device, dtype=torch.float32)
-            use_checkpoint = self.training and len(self.flows) > 10 
+        use_checkpoint = self.training and len(self.flows) > 10
 
-            for flow in self.flows:
-                if use_checkpoint:
-                    def run_flow(latent_z):
-                        return flow(latent_z)
-                    z, log_d = checkpoint.checkpoint(run_flow, z, use_reentrant=False)
-                else:
-                    z, log_d = flow(z)
-                
-                log_det += log_d.float()
-                
+        with ctx:
+            z, log_det = _apply_flow_sequence(
+                self.flows, z,
+                call_flow=lambda flow, zz: flow(zz),
+                use_checkpoint=use_checkpoint,
+            )
+
         return z, log_det
 
     def inverse_and_log_det(self, x, dtype=None):
@@ -80,24 +133,19 @@ class NormalizingFlow(nn.Module):
         else:
             ctx = contextlib.nullcontext()
 
-        with ctx:
-            log_det = torch.zeros(len(x), device=x.device, dtype=torch.float32)
-            use_checkpoint = self.training and len(self.flows) > 10 
+        use_checkpoint = self.training and len(self.flows) > 10
 
-            for i in range(len(self.flows) - 1, -1, -1):
-                flow = self.flows[i]
-                if use_checkpoint:
-                    def run_flow_inv(latent_x):
-                        return flow.inverse(latent_x)
-                    x, log_d = checkpoint.checkpoint(run_flow_inv, x, use_reentrant=False)
-                else:
-                    x, log_d = flow.inverse(x)
-                
-                log_det += log_d.float()
-                
+        with ctx:
+            x, log_det = _apply_flow_sequence(
+                self.flows, x,
+                call_flow=lambda flow, xx: flow.inverse(xx),
+                reverse=True,
+                use_checkpoint=use_checkpoint,
+            )
+
         return x, log_det
-        
-    def forward_kld(self, x):
+
+    def forward_kld(self, x: torch.Tensor) -> torch.Tensor:
         """Estimates forward KL divergence, see [arXiv 1912.02762](https://arxiv.org/abs/1912.02762)
 
         Args:
@@ -106,7 +154,7 @@ class NormalizingFlow(nn.Module):
         Returns:
           Estimate of forward KL divergence averaged over batch
         """
-        log_q = torch.zeros(len(x), device=x.device)
+        log_q = torch.zeros(len(x), dtype=x.dtype, device=x.device)
         z = x
         for i in range(len(self.flows) - 1, -1, -1):
             z, log_det = self.flows[i].inverse(z)
@@ -114,7 +162,7 @@ class NormalizingFlow(nn.Module):
         log_q += self.q0.log_prob(z)
         return -torch.mean(log_q)
 
-    def reverse_kld(self, num_samples=1, beta=1.0, score_fn=True):
+    def reverse_kld(self, num_samples: int = 1, beta: float = 1.0, score_fn: bool = True) -> torch.Tensor:
         """Estimates reverse KL divergence, see [arXiv 1912.02762](https://arxiv.org/abs/1912.02762)
 
         Args:
@@ -126,23 +174,30 @@ class NormalizingFlow(nn.Module):
           Estimate of the reverse KL divergence averaged over latent samples
         """
         z, log_q_ = self.q0(num_samples)
-        log_q = log_q_.clone()
-        for flow in self.flows:
-            z, log_det = flow(z)
-            log_q -= log_det
-        if not score_fn:
+        if score_fn:
+            log_q = log_q_.clone()
+            for flow in self.flows:
+                z, log_det = flow(z)
+                log_q -= log_det
+        else:
+            # log_q is recomputed below via the inverse pass with gradients
+            # disabled, so we skip accumulating it during the forward pass
+            # here (it would just be discarded).
+            for flow in self.flows:
+                z, _ = flow(z)
             z_ = z
             log_q = torch.zeros(len(z_), device=z_.device)
+            grad_states = utils.get_requires_grad_states(self)
             utils.set_requires_grad(self, False)
             for i in range(len(self.flows) - 1, -1, -1):
                 z_, log_det = self.flows[i].inverse(z_)
                 log_q += log_det
             log_q += self.q0.log_prob(z_)
-            utils.set_requires_grad(self, True)
+            utils.restore_requires_grad(self, grad_states)
         log_p = self.p.log_prob(z)
         return torch.mean(log_q) - beta * torch.mean(log_p)
 
-    def reverse_alpha_div(self, num_samples=1, alpha=1, dreg=False):
+    def reverse_alpha_div(self, num_samples: int = 1, alpha: float = 1, dreg: bool = False) -> torch.Tensor:
         """Alpha divergence when sampling from q
 
         Args:
@@ -158,15 +213,19 @@ class NormalizingFlow(nn.Module):
             log_q -= log_det
         log_p = self.p.log_prob(z)
         if dreg:
+            # Note: unlike reverse_kld, the forward-pass log_q above is not
+            # wasted here even when dreg=True: w_const depends on it before
+            # log_q gets recomputed via the inverse pass below.
             w_const = torch.exp(log_p - log_q).detach()
             z_ = z
             log_q = torch.zeros(len(z_), device=z_.device)
+            grad_states = utils.get_requires_grad_states(self)
             utils.set_requires_grad(self, False)
             for i in range(len(self.flows) - 1, -1, -1):
                 z_, log_det = self.flows[i].inverse(z_)
                 log_q += log_det
             log_q += self.q0.log_prob(z_)
-            utils.set_requires_grad(self, True)
+            utils.restore_requires_grad(self, grad_states)
             w = torch.exp(log_p - log_q)
             w_alpha = w_const**alpha
             w_alpha = w_alpha / torch.mean(w_alpha)
@@ -176,7 +235,7 @@ class NormalizingFlow(nn.Module):
             loss = np.sign(alpha - 1) * torch.logsumexp(alpha * (log_p - log_q), 0)
         return loss
 
-    def sample(self, num_samples=1):
+    def sample(self, num_samples: int = 1) -> Tuple[torch.Tensor, torch.Tensor]:
         """Samples from flow-based approximate distribution
 
         Args:
@@ -191,7 +250,7 @@ class NormalizingFlow(nn.Module):
             log_q -= log_det
         return z, log_q
 
-    def log_prob(self, x):
+    def log_prob(self, x: torch.Tensor) -> torch.Tensor:
         """Get log probability for batch
 
         Args:
@@ -208,7 +267,7 @@ class NormalizingFlow(nn.Module):
         log_q += self.q0.log_prob(z)
         return log_q
 
-    def save(self, path):
+    def save(self, path: str) -> None:
         """Save state dict of model
 
         Args:
@@ -216,13 +275,18 @@ class NormalizingFlow(nn.Module):
         """
         torch.save(self.state_dict(), path)
 
-    def load(self, path):
+    def load(self, path: str, map_location="cpu") -> None:
         """Load model from state dict
 
         Args:
           path: Path including filename where to load model from
+          map_location: Device to map the loaded tensors to (see
+            `torch.load`). Defaults to "cpu" for portability across
+            machines/devices; call `.to(device)` on the model afterwards
+            if needed.
         """
-        self.load_state_dict(torch.load(path))
+        state_dict = torch.load(path, map_location=map_location, weights_only=True)
+        self.load_state_dict(state_dict)
 
 class ConditionalNormalizingFlow(NormalizingFlow):
     """
@@ -230,8 +294,13 @@ class ConditionalNormalizingFlow(NormalizingFlow):
     which is also called context, to both the base distribution
     and the flow layers
     """
-    def forward(self, z, context=None):
+    def forward(self, z: torch.Tensor, context: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Transforms latent variable z to the flow variable x
+
+        Note:
+          Like `NormalizingFlow.forward`, calling the model as
+          `model(z, context=...)` performs this z -> x transform, not a
+          loss computation. Use `forward_kld`/`reverse_kld` for losses.
 
         Args:
           z: Batch in the latent space
@@ -244,7 +313,7 @@ class ConditionalNormalizingFlow(NormalizingFlow):
             z, _ = flow(z, context=context)
         return z
 
-    def inverse(self, x, context=None):
+    def inverse(self, x: torch.Tensor, context: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Transforms flow variable x to the latent variable z
 
         Args:
@@ -264,20 +333,16 @@ class ConditionalNormalizingFlow(NormalizingFlow):
         else:
             ctx = contextlib.nullcontext()
 
-        with ctx:
-            log_det = torch.zeros(len(z), device=z.device, dtype=torch.float32)
-            use_checkpoint = self.training and len(self.flows) > 10 
+        use_checkpoint = self.training and len(self.flows) > 10
 
-            for flow in self.flows:
-                if use_checkpoint:
-                    def run_flow(latent_z, ctx_val):
-                        return flow(latent_z, context=ctx_val)
-                    z, log_d = checkpoint.checkpoint(run_flow, z, context, use_reentrant=False)
-                else:
-                    z, log_d = flow(z, context=context)
-                
-                log_det += log_d.float()
-                
+        with ctx:
+            z, log_det = _apply_flow_sequence(
+                self.flows, z,
+                call_flow=lambda flow, zz, ctx_val: flow(zz, context=ctx_val),
+                checkpoint_args=(context,),
+                use_checkpoint=use_checkpoint,
+            )
+
         return z, log_det
 
     def inverse_and_log_det(self, x, context=None, dtype=None):
@@ -286,24 +351,20 @@ class ConditionalNormalizingFlow(NormalizingFlow):
         else:
             ctx = contextlib.nullcontext()
 
-        with ctx:
-            log_det = torch.zeros(len(x), device=x.device, dtype=torch.float32)
-            use_checkpoint = self.training and len(self.flows) > 10 
+        use_checkpoint = self.training and len(self.flows) > 10
 
-            for i in range(len(self.flows) - 1, -1, -1):
-                flow = self.flows[i]
-                if use_checkpoint:
-                    def run_flow_inv(latent_x, ctx_val):
-                        return flow.inverse(latent_x, context=ctx_val)
-                    x, log_d = checkpoint.checkpoint(run_flow_inv, x, context, use_reentrant=False)
-                else:
-                    x, log_d = flow.inverse(x, context=context)
-                
-                log_det += log_d.float()
-                
+        with ctx:
+            x, log_det = _apply_flow_sequence(
+                self.flows, x,
+                call_flow=lambda flow, xx, ctx_val: flow.inverse(xx, context=ctx_val),
+                reverse=True,
+                checkpoint_args=(context,),
+                use_checkpoint=use_checkpoint,
+            )
+
         return x, log_det
 
-    def sample(self, num_samples=1, context=None):
+    def sample(self, num_samples: int = 1, context: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Samples from flow-based approximate distribution
 
         Args:
@@ -319,7 +380,7 @@ class ConditionalNormalizingFlow(NormalizingFlow):
             log_q -= log_det
         return z, log_q
 
-    def log_prob(self, x, context=None):
+    def log_prob(self, x: torch.Tensor, context: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Get log probability for batch
 
         Args:
@@ -337,7 +398,7 @@ class ConditionalNormalizingFlow(NormalizingFlow):
         log_q += self.q0.log_prob(z, context=context)
         return log_q
 
-    def forward_kld(self, x, context=None):
+    def forward_kld(self, x: torch.Tensor, context: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Estimates forward KL divergence, see [arXiv 1912.02762](https://arxiv.org/abs/1912.02762)
 
         Args:
@@ -347,7 +408,7 @@ class ConditionalNormalizingFlow(NormalizingFlow):
         Returns:
           Estimate of forward KL divergence averaged over batch
         """
-        log_q = torch.zeros(len(x), device=x.device)
+        log_q = torch.zeros(len(x), dtype=x.dtype, device=x.device)
         z = x
         for i in range(len(self.flows) - 1, -1, -1):
             z, log_det = self.flows[i].inverse(z, context=context)
@@ -355,7 +416,8 @@ class ConditionalNormalizingFlow(NormalizingFlow):
         log_q += self.q0.log_prob(z, context=context)
         return -torch.mean(log_q)
 
-    def reverse_kld(self, num_samples=1, context=None, beta=1.0, score_fn=True):
+    def reverse_kld(self, num_samples: int = 1, context: Optional[torch.Tensor] = None,
+                    beta: float = 1.0, score_fn: bool = True) -> torch.Tensor:
         """Estimates reverse KL divergence, see [arXiv 1912.02762](https://arxiv.org/abs/1912.02762)
 
         Args:
@@ -368,20 +430,26 @@ class ConditionalNormalizingFlow(NormalizingFlow):
           Estimate of the reverse KL divergence averaged over latent samples
         """
         z, log_q_ = self.q0(num_samples, context=context)
-        log_q = torch.zeros_like(log_q_)
-        log_q += log_q_
-        for flow in self.flows:
-            z, log_det = flow(z, context=context)
-            log_q -= log_det
-        if not score_fn:
+        if score_fn:
+            log_q = log_q_.clone()
+            for flow in self.flows:
+                z, log_det = flow(z, context=context)
+                log_q -= log_det
+        else:
+            # log_q is recomputed below via the inverse pass with gradients
+            # disabled, so we skip accumulating it during the forward pass
+            # here (it would just be discarded).
+            for flow in self.flows:
+                z, _ = flow(z, context=context)
             z_ = z
             log_q = torch.zeros(len(z_), device=z_.device)
+            grad_states = utils.get_requires_grad_states(self)
             utils.set_requires_grad(self, False)
             for i in range(len(self.flows) - 1, -1, -1):
                 z_, log_det = self.flows[i].inverse(z_, context=context)
                 log_q += log_det
             log_q += self.q0.log_prob(z_, context=context)
-            utils.set_requires_grad(self, True)
+            utils.restore_requires_grad(self, grad_states)
         log_p = self.p.log_prob(z, context=context)
         return torch.mean(log_q) - beta * torch.mean(log_p)
 
@@ -390,9 +458,14 @@ class ClassCondFlow(nn.Module):
     Class conditional normalizing Flow model, providing the
     class to be conditioned on only to the base distribution,
     as done e.g. in [Glow](https://arxiv.org/abs/1807.03039)
+
+    Note:
+      This class does not define `forward()` (calling `model(x)` directly
+      will raise a `NotImplementedError` from `nn.Module`). Use
+      `forward_kld`, `log_prob`, or `sample` instead.
     """
 
-    def __init__(self, q0, flows):
+    def __init__(self, q0: nn.Module, flows: Sequence[nn.Module]):
         """Constructor
 
         Args:
@@ -400,10 +473,12 @@ class ClassCondFlow(nn.Module):
           flows: List of flows
         """
         super().__init__()
+        if q0 is None:
+            raise ValueError("ClassCondFlow: q0 (base distribution) must not be None")
         self.q0 = q0
         self.flows = nn.ModuleList(flows)
 
-    def forward_kld(self, x, y):
+    def forward_kld(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Estimates forward KL divergence, see [arXiv 1912.02762](https://arxiv.org/abs/1912.02762)
 
         Args:
@@ -420,7 +495,7 @@ class ClassCondFlow(nn.Module):
         log_q += self.q0.log_prob(z, y)
         return -torch.mean(log_q)
 
-    def sample(self, num_samples=1, y=None):
+    def sample(self, num_samples: int = 1, y: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Samples from flow-based approximate distribution
 
         Args:
@@ -436,7 +511,7 @@ class ClassCondFlow(nn.Module):
             log_q -= log_det
         return z, log_q
 
-    def log_prob(self, x, y):
+    def log_prob(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Get log probability for batch
 
         Args:
@@ -454,28 +529,35 @@ class ClassCondFlow(nn.Module):
         log_q += self.q0.log_prob(z, y)
         return log_q
 
-    def save(self, path):
+    def save(self, path: str) -> None:
         """Save state dict of model
 
         Args:
-         param path: Path including filename where to save model
+          path: Path including filename where to save model
         """
         torch.save(self.state_dict(), path)
 
-    def load(self, path):
+    def load(self, path: str, map_location="cpu") -> None:
         """Load model from state dict
 
         Args:
           path: Path including filename where to load model from
+          map_location: Device to map the loaded tensors to (see
+            `torch.load`). Defaults to "cpu" for portability across
+            machines/devices; call `.to(device)` on the model afterwards
+            if needed.
         """
-        self.load_state_dict(torch.load(path))
+        state_dict = torch.load(path, map_location=map_location, weights_only=True)
+        self.load_state_dict(state_dict)
 
 class MultiscaleFlow(nn.Module):
     """
     Normalizing Flow model with multiscale architecture, see RealNVP or Glow paper
     """
 
-    def __init__(self, q0, flows, merges, transform=None, class_cond=True):
+    def __init__(self, q0: Sequence[nn.Module], flows: Sequence[Sequence[nn.Module]],
+                 merges: Sequence[nn.Module], transform: Optional[nn.Module] = None,
+                 class_cond: bool = True):
         """Constructor
 
         Args:
@@ -488,16 +570,26 @@ class MultiscaleFlow(nn.Module):
         base distributions
         """
         super().__init__()
+        if len(flows) != len(q0):
+            raise ValueError(
+                f"MultiscaleFlow: got {len(q0)} base distribution(s) (q0) but "
+                f"{len(flows)} level(s) of flows; these must have the same length."
+            )
+        if len(merges) != len(q0) - 1:
+            raise ValueError(
+                f"MultiscaleFlow: expected {len(q0) - 1} merge operation(s) for "
+                f"{len(q0)} level(s), got {len(merges)}."
+            )
         self.q0 = nn.ModuleList(q0)
         self.num_levels = len(self.q0)
-        self.flows = torch.nn.ModuleList([nn.ModuleList(flow) for flow in flows])
-        self.merges = torch.nn.ModuleList(merges)
+        self.flows = nn.ModuleList([nn.ModuleList(flow) for flow in flows])
+        self.merges = nn.ModuleList(merges)
         self.transform = transform
         self.class_cond = class_cond
-        self._latent_shapes = None   
-        self._x_shape = None         
+        self._latent_shapes = None
+        self._x_shape = None
 
-    def forward_kld(self, x, y=None):
+    def forward_kld(self, x: torch.Tensor, y: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Estimates forward KL divergence, see [arXiv 1912.02762](https://arxiv.org/abs/1912.02762)
 
         Args:
@@ -509,8 +601,14 @@ class MultiscaleFlow(nn.Module):
         """
         return -torch.mean(self.log_prob(x, y))
 
-    def forward(self, x, y=None):
+    def forward(self, x: torch.Tensor, y: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Get negative log-likelihood for maximum likelihood training
+
+        Note:
+          Unlike `NormalizingFlow.forward`, calling this model as
+          `model(x, y)` returns a scalar-per-batch loss (the negative
+          log-likelihood), not a transformed sample. Use `sample()` to
+          draw new samples from the model.
 
         Args:
           x: Batch of data
@@ -521,7 +619,7 @@ class MultiscaleFlow(nn.Module):
         """
         return -self.log_prob(x, y)
 
-    def forward_and_log_det(self, z, dtype=None):
+    def forward_and_log_det(self, z: List[torch.Tensor], dtype=None) -> Tuple[torch.Tensor, torch.Tensor]:
         device_type = z[0].device.type if isinstance(z, list) else z.device.type
         
         if dtype is not None:
@@ -530,50 +628,52 @@ class MultiscaleFlow(nn.Module):
             ctx = contextlib.nullcontext()
             
         with ctx:
-            log_det = torch.zeros(len(z[0]), dtype=torch.float32, device=z[0].device)
+            accum_dtype = stable_fp_dtype(z[0])
+            log_det = torch.zeros(len(z[0]), dtype=accum_dtype, device=z[0].device)
 
             for i in range(self.num_levels):
                 if i == 0:
                     z_ = z[0]
                 else:
                     z_, log_det_ = self.merges[i - 1]([z_, z[i]])
-                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
                 for flow in self.flows[i]:
                     z_, log_det_ = flow(z_)
-                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
             if self.transform is not None:
                 z_, log_det_ = self.transform(z_)
-                log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
         return z_, log_det
 
-    def inverse_and_log_det(self, x, dtype=None):
+    def inverse_and_log_det(self, x: torch.Tensor, dtype=None) -> Tuple[List[torch.Tensor], torch.Tensor]:
         if dtype is not None:
             ctx = torch.amp.autocast(device_type=x.device.type, dtype=dtype)
         else:
             ctx = contextlib.nullcontext()
 
         with ctx:
-            log_det = torch.zeros(x.shape[0], dtype=torch.float32, device=x.device)
+            accum_dtype = stable_fp_dtype(x)
+            log_det = torch.zeros(x.shape[0], dtype=accum_dtype, device=x.device)
 
             if self.transform is not None:
                 x, log_det_ = self.transform.inverse(x)
-                log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
             z = [None] * self.num_levels
 
             for i in range(self.num_levels - 1, -1, -1):
                 for flow in reversed(self.flows[i]):
                     x, log_det_ = flow.inverse(x)
-                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
                 if i == 0:
                     z[i] = x
                 else:
                     [x, z[i]], log_det_ = self.merges[i - 1].inverse(x)
-                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
             if self._latent_shapes is None:
                 zs = z if isinstance(z, (list, tuple)) else [z]
@@ -583,7 +683,8 @@ class MultiscaleFlow(nn.Module):
         return z, log_det
 
     @torch.no_grad()
-    def sample(self, num_samples=1, y=None, temperature=None):
+    def sample(self, num_samples: int = 1, y: Optional[torch.Tensor] = None,
+               temperature: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Draw per-level latents with cached shapes and rebuild x via forward().
         Returns: (x, log_prob(x))
@@ -641,7 +742,7 @@ class MultiscaleFlow(nn.Module):
             self.reset_temperature()
         return x, log_q
 
-    def log_prob(self, x, y=None):
+    def log_prob(self, x: torch.Tensor, y: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Get log probability for batch
 
         Args:
@@ -671,7 +772,7 @@ class MultiscaleFlow(nn.Module):
                 log_q += self.q0[i].log_prob(z_)
         return log_q
 
-    def save(self, path):
+    def save(self, path: str) -> None:
         """Save state dict of model
 
         Args:
@@ -679,15 +780,20 @@ class MultiscaleFlow(nn.Module):
         """
         torch.save(self.state_dict(), path)
 
-    def load(self, path):
+    def load(self, path: str, map_location="cpu") -> None:
         """Load model from state dict
 
         Args:
           path: Path including filename where to load model from
+          map_location: Device to map the loaded tensors to (see
+            `torch.load`). Defaults to "cpu" for portability across
+            machines/devices; call `.to(device)` on the model afterwards
+            if needed.
         """
-        self.load_state_dict(torch.load(path))
+        state_dict = torch.load(path, map_location=map_location, weights_only=True)
+        self.load_state_dict(state_dict)
 
-    def set_temperature(self, temperature):
+    def set_temperature(self, temperature: Optional[float]) -> None:
         """Set temperature for temperature a annealed sampling
 
         Args:
@@ -702,7 +808,7 @@ class MultiscaleFlow(nn.Module):
                     "support temperature annealed sampling"
                 )
 
-    def reset_temperature(self):
+    def reset_temperature(self) -> None:
         """
         Set temperature values of base distributions back to None
         """
@@ -714,22 +820,27 @@ class NormalizingFlowVAE(nn.Module):
     VAE using normalizing flows to express approximate distribution
     """
 
-    def __init__(self, prior, q0=distributions.Dirac(), flows=None, decoder=None):
+    def __init__(self, prior: nn.Module, q0: Optional[nn.Module] = None,
+                 flows: Optional[Sequence[nn.Module]] = None, decoder: Optional[nn.Module] = None):
         """Constructor of normalizing flow model
 
         Args:
           prior: Prior distribution of te VAE, i.e. Gaussian
           decoder: Optional decoder
           flows: Flows to transform output of base encoder
-          q0: Base Encoder
+          q0: Base Encoder, defaults to a new `distributions.Dirac()` instance
         """
         super().__init__()
+        # Note: q0 is instantiated here rather than as a mutable default
+        # argument (`q0=distributions.Dirac()`), which would otherwise
+        # create a single shared module reused by every instance that
+        # doesn't pass its own q0.
         self.prior = prior
         self.decoder = decoder
         self.flows = nn.ModuleList(flows)
-        self.q0 = q0
+        self.q0 = q0 if q0 is not None else distributions.Dirac()
 
-    def forward(self, x, num_samples=1):
+    def forward(self, x: torch.Tensor, num_samples: int = 1) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Takes data batch, samples num_samples for each data point from base distribution
 
         Args:

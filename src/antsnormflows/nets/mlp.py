@@ -49,7 +49,7 @@ class MLP(nn.Module):
             elif output_fn == "clampexp":
                 net.append(utils.ClampExp())
             else:
-                NotImplementedError("This output function is not implemented.")
+                raise NotImplementedError("This output function is not implemented.")
             if output_scale is not None:
                 net.append(utils.ConstScaleLayer(output_scale))
         self.net = nn.Sequential(*net)
