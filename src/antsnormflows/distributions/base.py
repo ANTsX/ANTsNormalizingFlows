@@ -18,6 +18,29 @@ def _clamp_log_scale(log_scale, min_log=-5.0, max_log=5.0):
     return torch.clamp(log_scale, min_log, max_log)
 
 
+def _bound_exponent(x, cap: float = 15.0):
+    """
+    Bound a value *before* it is passed to torch.exp(), via a tanh clamp
+    (cap * tanh(x / cap)) rather than clamping the exp() result afterward.
+
+    GlowBase._prep_params() computes `loc`/`log_scale` as a *product* with an
+    exp() term (e.g. `self.loc * exp(self.loc_logs * logscale_factor)`).
+    Unlike `log_scale`, `loc` has no downstream clamp at all, and even
+    `log_scale`'s clamp only bounds the final product -- if the exp() term
+    itself overflows to inf (float32 overflows past exp(~88)) before the
+    multiply/clamp happens, the result can be inf or (if the other factor is
+    ever exactly 0) nan, which torch.clamp does not repair. If `loc_logs`
+    drifts during training, this can silently produce a non-finite base-
+    distribution mean, in turn producing non-finite samples/log_prob with no
+    error -- exactly the failure mode behind intermittent "non-finite in
+    sample grid" warnings during Glow training. Bounding the exponent up
+    front keeps exp() itself from ever overflowing, for both sampling and
+    log_prob. cap=15 is generous (exp(15) ~ 3.3e6) relative to legitimate
+    parameter magnitudes but far below float32's overflow threshold (~88).
+    """
+    return cap * torch.tanh(x / cap)
+
+
 def _apply_temperature(log_scale, temperature):
     if temperature is None:
         return log_scale
@@ -356,8 +379,8 @@ class GlowBase(BaseDistribution):
         self.temperature = None
 
     def _prep_params(self, y=None):
-        loc = self.loc * torch.exp(self.loc_logs * self.logscale_factor)
-        log_scale = self.log_scale * torch.exp(self.log_scale_logs * self.logscale_factor)
+        loc = self.loc * torch.exp(_bound_exponent(self.loc_logs * self.logscale_factor))
+        log_scale = self.log_scale * torch.exp(_bound_exponent(self.log_scale_logs * self.logscale_factor))
         if self.class_cond:
             if y is None:
                 raise ValueError("y must be provided for class-conditional GlowBase.forward")
