@@ -2,7 +2,7 @@ import torch
 import math
 import torch.nn as nn
 
-from .base import Flow
+from .base import Flow, stable_fp_dtype
 from .affine.coupling import AffineConstFlow
 
 class ActNorm(AffineConstFlow):
@@ -37,16 +37,17 @@ class ActNorm(AffineConstFlow):
         """
         assert self.s is not None and self.t is not None
         with torch.no_grad():
-            # compute stats in FP32 across batch/spatial dims
-            mean = z.float().mean(dim=self.batch_dims, keepdim=True)
-            std  = z.float().std( dim=self.batch_dims, keepdim=True) + 1e-6
+            # compute stats at a stable precision (>= fp32, preserving fp64)
+            stable_dtype = stable_fp_dtype(z)
+            mean = z.to(stable_dtype).mean(dim=self.batch_dims, keepdim=True)
+            std  = z.to(stable_dtype).std( dim=self.batch_dims, keepdim=True) + 1e-6
             s_init = -torch.log(std)                              # log-scale
             s_init = self._bound_log_s(s_init, self.log_s_cap)    # bound at init
             self.s.copy_(s_init.to(self.s.dtype))                 # store log-scale
 
-            # t = -mean * exp(s)  (compute exp in FP32 for stability)
+            # t = -mean * exp(s)  (compute exp at stable precision)
             with torch.amp.autocast('cuda', enabled=False):
-                exp_s = torch.exp(self.s.float())
+                exp_s = torch.exp(self.s.to(stable_dtype))
             self.t.copy_((-mean * exp_s).to(self.t.dtype))
 
             # IMPORTANT: update buffer in-place (don’t rebind the attribute)
@@ -57,11 +58,12 @@ class ActNorm(AffineConstFlow):
         if not (self.data_dep_init_done > 0.0):
             self._data_dep_init_forward(z)
 
-        # use bounded log-scale and FP32 exp/logdet
+        # use bounded log-scale and a stable (>= fp32, fp64-preserving) exp/logdet
+        stable_dtype = stable_fp_dtype(z)
         log_s = self._bound_log_s(self.s, self.log_s_cap)
-        log_s32 = log_s.float()
+        log_s32 = log_s.to(stable_dtype)
         with torch.amp.autocast('cuda', enabled=False):
-            s32 = torch.exp(log_s32)  # per-channel scale in FP32
+            s32 = torch.exp(log_s32)  # per-channel scale at stable precision
 
         z_out = z * s32.to(z.dtype) + self.t
 
@@ -73,13 +75,14 @@ class ActNorm(AffineConstFlow):
         return z_out, log_det
 
     def inverse(self, z: torch.Tensor):
+        stable_dtype = stable_fp_dtype(z)
         # (rare path) allow init during inverse if first call happens here
         if not (self.data_dep_init_done > 0.0):
             # mirror of forward init (kept for completeness)
             assert self.s is not None and self.t is not None
             with torch.no_grad():
-                mean = z.float().mean(dim=self.batch_dims, keepdim=True)
-                std  = z.float().std( dim=self.batch_dims, keepdim=True) + 1e-6
+                mean = z.to(stable_dtype).mean(dim=self.batch_dims, keepdim=True)
+                std  = z.to(stable_dtype).std( dim=self.batch_dims, keepdim=True) + 1e-6
                 s_init = torch.log(std)
                 s_init = self._bound_log_s(s_init, self.log_s_cap)
                 self.s.copy_(s_init.to(self.s.dtype))
@@ -87,7 +90,7 @@ class ActNorm(AffineConstFlow):
                 self.data_dep_init_done.fill_(1.0)
 
         log_s = self._bound_log_s(self.s, self.log_s_cap)
-        log_s32 = log_s.float()
+        log_s32 = log_s.to(stable_dtype)
         with torch.amp.autocast('cuda', enabled=False):
             inv_s32 = torch.exp(-log_s32)
 
@@ -120,46 +123,49 @@ class BatchNorm(Flow):
         return int(math.prod(z.shape[2:])) if z.dim() > 2 else 1
 
     def forward(self, z: torch.Tensor):
-        # per-channel mean/var over batch+spatial, in fp32
+        # per-channel mean/var over batch+spatial, at a stable precision
+        # (>= fp32, preserving fp64)
+        stable_dtype = stable_fp_dtype(z)
         dims = self._reduce_dims(z)
-        z32 = z.float()
-        mean = z32.mean(dim=dims, keepdim=True)
-        var  = z32.var( dim=dims, keepdim=True, unbiased=False)
+        z_stable = z.to(stable_dtype)
+        mean = z_stable.mean(dim=dims, keepdim=True)
+        var  = z_stable.var( dim=dims, keepdim=True, unbiased=False)
         if self.detach_stats:
             mean = mean.detach()
             var  = var.detach()
 
-        eps32 = self.eps.float()
+        eps_stable = self.eps.to(stable_dtype)
 
-        # normalize in fp32 (AMP-safe), cast result back
+        # normalize at stable precision (AMP-safe), cast result back
         with torch.amp.autocast('cuda', enabled=False):
-            inv_std32 = torch.rsqrt(var + eps32)  # = 1/sqrt(var+eps)
-        z_hat = (z - mean.to(z.dtype)) * inv_std32.to(z.dtype)
+            inv_std_stable = torch.rsqrt(var + eps_stable)  # = 1/sqrt(var+eps)
+        z_hat = (z - mean.to(z.dtype)) * inv_std_stable.to(z.dtype)
 
         # log|det J| per sample: (#spatial) * sum_c log(inv_std) = -0.5 * (#spatial) * sum_c log(var+eps)
         with torch.amp.autocast('cuda', enabled=False):
-            logdet_per_channel32 = (-0.5) * torch.log(var + eps32).flatten(1).sum(dim=1)  # (1,)
-        log_det = (self._num_spatial(z) * logdet_per_channel32).to(z.dtype)               # (N,)
+            logdet_per_channel = (-0.5) * torch.log(var + eps_stable).flatten(1).sum(dim=1)  # (1,)
+        log_det = (self._num_spatial(z) * logdet_per_channel).to(z.dtype)                    # (N,)
         return z_hat, log_det
 
     def inverse(self, z: torch.Tensor):
         # recompute the same batch stats (detach if desired)
+        stable_dtype = stable_fp_dtype(z)
         dims = self._reduce_dims(z)
-        z32 = z.float()
-        mean = z32.mean(dim=dims, keepdim=True)
-        var  = z32.var( dim=dims, keepdim=True, unbiased=False)
+        z_stable = z.to(stable_dtype)
+        mean = z_stable.mean(dim=dims, keepdim=True)
+        var  = z_stable.var( dim=dims, keepdim=True, unbiased=False)
         if self.detach_stats:
             mean = mean.detach()
             var  = var.detach()
 
-        eps32 = self.eps.float()
+        eps_stable = self.eps.to(stable_dtype)
         with torch.amp.autocast('cuda', enabled=False):
-            std32 = torch.sqrt(var + eps32)
+            std_stable = torch.sqrt(var + eps_stable)
 
-        z_out = z * std32.to(z.dtype) + mean.to(z.dtype)
+        z_out = z * std_stable.to(z.dtype) + mean.to(z.dtype)
 
         # inverse logdet is the negative of forward's
         with torch.amp.autocast('cuda', enabled=False):
-            logdet_per_channel32 = (+0.5) * torch.log(var + eps32).flatten(1).sum(dim=1)
-        log_det = (self._num_spatial(z) * logdet_per_channel32).to(z.dtype)
+            logdet_per_channel = (+0.5) * torch.log(var + eps_stable).flatten(1).sum(dim=1)
+        log_det = (self._num_spatial(z) * logdet_per_channel).to(z.dtype)
         return z_out, log_det

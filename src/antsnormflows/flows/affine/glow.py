@@ -48,7 +48,10 @@ class GlowBlock2d(Flow):
 
         self.flows.append(ActNorm((channels,) + (1, 1)))
         if channels > 1:
-            self.flows.append(Invertible1x1Conv(channels, use_lu))
+            # Pass s_cap through so the invertible 1x1 conv's log-scale clamp
+            # matches the caller's requested scale_cap instead of silently
+            # using Invertible1x1Conv's own hardcoded default (2.5).
+            self.flows.append(Invertible1x1Conv(channels, use_lu, s_cap=s_cap))
         self.flows.append(AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap))
 
     def forward(self, z):
@@ -128,7 +131,10 @@ class GlowBlock3d(Flow):
 
         self.flows += [ActNorm((channels,) + (1, 1, 1))]
         if channels > 1:
-            self.flows += [Invertible1x1x1Conv(channels, use_lu)]
+            # Pass s_cap through so the invertible 1x1x1 conv's log-scale
+            # clamp matches the caller's requested scale_cap instead of
+            # silently using Invertible1x1x1Conv's own hardcoded default (2.5).
+            self.flows += [Invertible1x1x1Conv(channels, use_lu, s_cap=s_cap)]
         self.flows += [AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap)]
 
     def forward(self, z):

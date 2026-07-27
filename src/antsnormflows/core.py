@@ -7,6 +7,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from . import distributions
 from . import utils
+from .flows.base import stable_fp_dtype
 
 import torch.utils.checkpoint as checkpoint
 
@@ -14,7 +15,9 @@ import torch.utils.checkpoint as checkpoint
 def _apply_flow_sequence(flows, z, call_flow, reverse=False, use_checkpoint=False,
                           checkpoint_args=()):
     """Applies a sequence of flows (or their inverse) to a batch, accumulating
-    the total log-determinant in float32.
+    the total log-determinant at a stable floating-point precision (at least
+    float32; float64 is preserved if `z` is already double precision -- see
+    `stable_fp_dtype`).
 
     Factors out the checkpointing/accumulation logic shared by
     `NormalizingFlow` and `ConditionalNormalizingFlow`'s
@@ -38,7 +41,8 @@ def _apply_flow_sequence(flows, z, call_flow, reverse=False, use_checkpoint=Fals
     Returns:
       Tuple of (transformed batch, total log-determinant)
     """
-    log_det = torch.zeros(len(z), device=z.device, dtype=torch.float32)
+    accum_dtype = stable_fp_dtype(z)
+    log_det = torch.zeros(len(z), device=z.device, dtype=accum_dtype)
     indices = range(len(flows) - 1, -1, -1) if reverse else range(len(flows))
 
     for i in indices:
@@ -49,7 +53,7 @@ def _apply_flow_sequence(flows, z, call_flow, reverse=False, use_checkpoint=Fals
             z, log_d = checkpoint.checkpoint(_run, z, *checkpoint_args, use_reentrant=False)
         else:
             z, log_d = call_flow(flow, z, *checkpoint_args)
-        log_det += log_d.float()
+        log_det += log_d.to(accum_dtype)
 
     return z, log_det
 
@@ -624,22 +628,23 @@ class MultiscaleFlow(nn.Module):
             ctx = contextlib.nullcontext()
             
         with ctx:
-            log_det = torch.zeros(len(z[0]), dtype=torch.float32, device=z[0].device)
+            accum_dtype = stable_fp_dtype(z[0])
+            log_det = torch.zeros(len(z[0]), dtype=accum_dtype, device=z[0].device)
 
             for i in range(self.num_levels):
                 if i == 0:
                     z_ = z[0]
                 else:
                     z_, log_det_ = self.merges[i - 1]([z_, z[i]])
-                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
                 for flow in self.flows[i]:
                     z_, log_det_ = flow(z_)
-                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
             if self.transform is not None:
                 z_, log_det_ = self.transform(z_)
-                log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
         return z_, log_det
 
@@ -650,24 +655,25 @@ class MultiscaleFlow(nn.Module):
             ctx = contextlib.nullcontext()
 
         with ctx:
-            log_det = torch.zeros(x.shape[0], dtype=torch.float32, device=x.device)
+            accum_dtype = stable_fp_dtype(x)
+            log_det = torch.zeros(x.shape[0], dtype=accum_dtype, device=x.device)
 
             if self.transform is not None:
                 x, log_det_ = self.transform.inverse(x)
-                log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
             z = [None] * self.num_levels
 
             for i in range(self.num_levels - 1, -1, -1):
                 for flow in reversed(self.flows[i]):
                     x, log_det_ = flow.inverse(x)
-                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
                 if i == 0:
                     z[i] = x
                 else:
                     [x, z[i]], log_det_ = self.merges[i - 1].inverse(x)
-                    log_det += log_det_.float() if torch.is_tensor(log_det_) else log_det_
+                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
             if self._latent_shapes is None:
                 zs = z if isinstance(z, (list, tuple)) else [z]

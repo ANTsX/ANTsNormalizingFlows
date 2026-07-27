@@ -3,7 +3,7 @@ import numpy as np
 from torch import nn
 from torch.nn import functional as F, init
 
-from .base import Flow
+from .base import Flow, stable_fp_dtype
 
 
 class Permute(Flow):
@@ -87,8 +87,11 @@ class Invertible1x1Conv(Flow):
 
     # --- helper: bounded LU log-diagonal in fp32 ---
     def _bounded_log_s32(self):
+        # "32" in the name reflects the historical intent (>= fp32); the
+        # actual dtype used is stable_fp_dtype(self.log_S), which preserves
+        # float64 when the module has been cast with .double().
         cap = self.s_cap
-        log_s32 = self.log_S.float()
+        log_s32 = self.log_S.to(stable_fp_dtype(self.log_S))
         return cap * torch.tanh(log_s32 / cap)
 
     def _assemble_W(self, inverse=False):
@@ -115,7 +118,7 @@ class Invertible1x1Conv(Flow):
             log_det = (-log_s32.sum() * hw).to(z.dtype)
         else:
             # compute slogdet in fp32 for numerical safety
-            W32 = self.W.float()
+            W32 = self.W.to(stable_fp_dtype(self.W))
             with torch.amp.autocast('cuda', enabled=False):
                 sign, logabsdet = torch.slogdet(W32)
             hw = z.size(2) * z.size(3)
@@ -136,7 +139,7 @@ class Invertible1x1Conv(Flow):
             log_det = (log_s32.sum() * hw).to(z.dtype)
         else:
             W = self.W
-            W32 = W.float()
+            W32 = W.to(stable_fp_dtype(W))
             with torch.amp.autocast('cuda', enabled=False):
                 sign, logabsdet = torch.slogdet(W32)
             hw = z.size(2) * z.size(3)
@@ -178,8 +181,11 @@ class Invertible1x1x1Conv(Flow):
             self.W = nn.Parameter(Q)
 
     def _bounded_log_s32(self):
+        # "32" in the name reflects the historical intent (>= fp32); the
+        # actual dtype used is stable_fp_dtype(self.log_S), which preserves
+        # float64 when the module has been cast with .double().
         cap = self.s_cap
-        log_s32 = self.log_S.float()
+        log_s32 = self.log_S.to(stable_fp_dtype(self.log_S))
         return cap * torch.tanh(log_s32 / cap)
 
     def _assemble_W(self, inverse=False):
@@ -202,7 +208,7 @@ class Invertible1x1x1Conv(Flow):
             hwd = z.size(2) * z.size(3) * z.size(4)
             log_det = (-log_s32.sum() * hwd).to(z.dtype)
         else:
-            W32 = self.W.float()
+            W32 = self.W.to(stable_fp_dtype(self.W))
             with torch.amp.autocast('cuda', enabled=False):
                 sign, logabsdet = torch.slogdet(W32)
             hwd = z.size(2) * z.size(3) * z.size(4)
@@ -225,7 +231,7 @@ class Invertible1x1x1Conv(Flow):
             log_det = (log_s32.sum() * hwd).to(z.dtype)
         else:
             W = self.W
-            W32 = W.float()
+            W32 = W.to(stable_fp_dtype(W))
             with torch.amp.autocast('cuda', enabled=False):
                 sign, logabsdet = torch.slogdet(W32)
             hwd = z.size(2) * z.size(3) * z.size(4)
