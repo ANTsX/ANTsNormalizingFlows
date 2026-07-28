@@ -22,7 +22,8 @@ class GlowBlock2d(Flow):
         use_lu=True,
         net_actnorm=True,
         s_cap=2.0,
-        conv_s_cap=None
+        conv_s_cap=None,
+        actnorm_s_cap=None,
     ):
         """
         conv_s_cap: optional override for the Invertible1x1Conv's own log-scale
@@ -32,6 +33,11 @@ class GlowBlock2d(Flow):
         conv correctly received `s_cap` -- those checkpoints' weights were
         calibrated against the conv's old hardcoded default, not against the
         configured `scale_cap`.
+        actnorm_s_cap: optional override for this block's ActNorm log-scale
+        clamp. If None (default), ActNorm uses `s_cap` (matching the caller's
+        requested scale_cap) instead of its own hardcoded default (5.0). Pass
+        an explicit value to reproduce the pre-fix behavior for checkpoints
+        trained before ActNorm correctly received `s_cap`.
         """
         super().__init__()
         self.flows = nn.ModuleList([])
@@ -56,7 +62,13 @@ class GlowBlock2d(Flow):
             channels_, kernel_size, leaky, init_zeros, actnorm=net_actnorm
         )
 
-        self.flows.append(ActNorm((channels,) + (1, 1)))
+        # Bind this ActNorm's log-scale clamp to the caller's requested
+        # scale_cap instead of silently using ActNorm's own hardcoded
+        # default (5.0), unless actnorm_s_cap explicitly overrides it.
+        self.flows.append(ActNorm(
+            (channels,) + (1, 1),
+            log_s_cap=(actnorm_s_cap if actnorm_s_cap is not None else s_cap),
+        ))
         if channels > 1:
             # Pass s_cap through so the invertible 1x1 conv's log-scale clamp
             # matches the caller's requested scale_cap instead of silently
@@ -68,11 +80,20 @@ class GlowBlock2d(Flow):
             ))
         self.flows.append(AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap))
 
+        # Bound applied only in the generative direction (sample()), after
+        # each sub-flow, to stop a local blowup from cascading through the
+        # remaining blocks -- Invertible1x1Conv mixes all channels linearly,
+        # so a single non-finite channel otherwise contaminates the whole
+        # tensor within a couple of blocks. Does not affect inverse()/training.
+        self._gen_clamp = 1.0e4
+
     def forward(self, z):
         log_det_tot = torch.zeros(z.shape[0], dtype=z.dtype, device=z.device)
 
         for idx, flow in enumerate(self.flows):
             z, log_det = flow(z)
+            z = torch.nan_to_num(z, nan=0.0, posinf=self._gen_clamp, neginf=-self._gen_clamp)
+            z = torch.clamp(z, -self._gen_clamp, self._gen_clamp)
             log_det_tot += log_det
 
         return z, log_det_tot
@@ -109,7 +130,8 @@ class GlowBlock3d(Flow):
         use_lu=True,
         net_actnorm=True,
         s_cap=2.0,
-        conv_s_cap=None
+        conv_s_cap=None,
+        actnorm_s_cap=None,
     ):
         """Constructor
 
@@ -127,6 +149,11 @@ class GlowBlock3d(Flow):
             clamp. If None (default), the conv uses `s_cap`. Pass an explicit
             value (e.g. 2.5) to reproduce the pre-fix behavior for checkpoints
             trained before the invertible conv correctly received `s_cap`.
+          actnorm_s_cap: optional override for this block's ActNorm log-scale
+            clamp. If None (default), ActNorm uses `s_cap` instead of its own
+            hardcoded default (5.0). Pass an explicit value to reproduce the
+            pre-fix behavior for checkpoints trained before ActNorm correctly
+            received `s_cap`.
         """
         super().__init__()
         self.flows = nn.ModuleList([])
@@ -148,7 +175,13 @@ class GlowBlock3d(Flow):
             channels_, kernel_size, leaky, init_zeros, actnorm=net_actnorm
         )
 
-        self.flows += [ActNorm((channels,) + (1, 1, 1))]
+        # Bind this ActNorm's log-scale clamp to the caller's requested
+        # scale_cap instead of silently using ActNorm's own hardcoded
+        # default (5.0), unless actnorm_s_cap explicitly overrides it.
+        self.flows += [ActNorm(
+            (channels,) + (1, 1, 1),
+            log_s_cap=(actnorm_s_cap if actnorm_s_cap is not None else s_cap),
+        )]
         if channels > 1:
             # Pass s_cap through so the invertible 1x1x1 conv's log-scale
             # clamp matches the caller's requested scale_cap instead of
@@ -160,11 +193,20 @@ class GlowBlock3d(Flow):
             )]
         self.flows += [AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap)]
 
+        # Bound applied only in the generative direction (sample()), after
+        # each sub-flow, to stop a local blowup from cascading through the
+        # remaining blocks -- Invertible1x1x1Conv mixes all channels linearly,
+        # so a single non-finite channel otherwise contaminates the whole
+        # tensor within a couple of blocks. Does not affect inverse()/training.
+        self._gen_clamp = 1.0e4
+
     def forward(self, z):
         log_det_tot = torch.zeros(z.shape[0], dtype=z.dtype, device=z.device)
 
         for idx, flow in enumerate(self.flows):
             z, log_det = flow(z)
+            z = torch.nan_to_num(z, nan=0.0, posinf=self._gen_clamp, neginf=-self._gen_clamp)
+            z = torch.clamp(z, -self._gen_clamp, self._gen_clamp)
             log_det_tot += log_det
 
         return z, log_det_tot
