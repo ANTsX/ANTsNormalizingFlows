@@ -557,7 +557,7 @@ class MultiscaleFlow(nn.Module):
 
     def __init__(self, q0: Sequence[nn.Module], flows: Sequence[Sequence[nn.Module]],
                  merges: Sequence[nn.Module], transform: Optional[nn.Module] = None,
-                 class_cond: bool = True):
+                 class_cond: bool = True, grad_checkpoint: Optional[bool] = None):
         """Constructor
 
         Args:
@@ -568,8 +568,18 @@ class MultiscaleFlow(nn.Module):
           transform: Initial transformation of inputs
           class_cond: Flag, indicated whether model has class conditional
         base distributions
+          grad_checkpoint: Override for whether forward_and_log_det/
+            inverse_and_log_det checkpoint each level's flow sequence
+            (torch.utils.checkpoint, trades compute for activation memory).
+            None (default) keeps the automatic heuristic -- checkpoint a
+            level only if len(flows_at_that_level) > 10 -- matching
+            NormalizingFlow's convention. True/False force it on/off
+            regardless of level depth. In all cases it only ever applies
+            while self.training is True (eval/EMA models never pay the
+            recompute cost).
         """
         super().__init__()
+        self._grad_checkpoint_override = grad_checkpoint
         if len(flows) != len(q0):
             raise ValueError(
                 f"MultiscaleFlow: got {len(q0)} base distribution(s) (q0) but "
@@ -621,12 +631,12 @@ class MultiscaleFlow(nn.Module):
 
     def forward_and_log_det(self, z: List[torch.Tensor], dtype=None) -> Tuple[torch.Tensor, torch.Tensor]:
         device_type = z[0].device.type if isinstance(z, list) else z.device.type
-        
+
         if dtype is not None:
             ctx = torch.amp.autocast(device_type=device_type, dtype=dtype)
         else:
             ctx = contextlib.nullcontext()
-            
+
         with ctx:
             accum_dtype = stable_fp_dtype(z[0])
             log_det = torch.zeros(len(z[0]), dtype=accum_dtype, device=z[0].device)
@@ -638,9 +648,24 @@ class MultiscaleFlow(nn.Module):
                     z_, log_det_ = self.merges[i - 1]([z_, z[i]])
                     log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
 
-                for flow in self.flows[i]:
-                    z_, log_det_ = flow(z_)
-                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
+                # See inverse_and_log_det below for why this goes through
+                # _apply_flow_sequence's checkpointing instead of a plain
+                # loop -- same rationale, generative direction (used by
+                # sample()) rather than training's density-estimation path.
+                depth_heuristic = len(self.flows[i]) > 10
+                checkpoint_wanted = (
+                    depth_heuristic
+                    if self._grad_checkpoint_override is None
+                    else self._grad_checkpoint_override
+                )
+                use_checkpoint = self.training and checkpoint_wanted
+                z_, log_det_i = _apply_flow_sequence(
+                    self.flows[i], z_,
+                    call_flow=lambda flow, zz: flow(zz),
+                    reverse=False,
+                    use_checkpoint=use_checkpoint,
+                )
+                log_det += log_det_i.to(accum_dtype)
 
             if self.transform is not None:
                 z_, log_det_ = self.transform(z_)
@@ -665,9 +690,31 @@ class MultiscaleFlow(nn.Module):
             z = [None] * self.num_levels
 
             for i in range(self.num_levels - 1, -1, -1):
-                for flow in reversed(self.flows[i]):
-                    x, log_det_ = flow.inverse(x)
-                    log_det += log_det_.to(accum_dtype) if torch.is_tensor(log_det_) else log_det_
+                # Gradient checkpointing per level, mirroring
+                # NormalizingFlow.inverse_and_log_det (same
+                # _apply_flow_sequence helper, same "only in training mode,
+                # only past a depth of 10 flow steps" heuristic -- eval/EMA
+                # models run with self.training=False, so sampling/eval
+                # never pays the recompute cost, only the training forward
+                # pass on the real (non-EMA) model does). This is the
+                # actual density-estimation path (called via
+                # self.model.inverse_and_log_det / .log_prob during
+                # training), so it's where the K*L-deep activation memory
+                # was accumulating.
+                depth_heuristic = len(self.flows[i]) > 10
+                checkpoint_wanted = (
+                    depth_heuristic
+                    if self._grad_checkpoint_override is None
+                    else self._grad_checkpoint_override
+                )
+                use_checkpoint = self.training and checkpoint_wanted
+                x, log_det_i = _apply_flow_sequence(
+                    self.flows[i], x,
+                    call_flow=lambda flow, xx: flow.inverse(xx),
+                    reverse=True,
+                    use_checkpoint=use_checkpoint,
+                )
+                log_det += log_det_i.to(accum_dtype)
 
                 if i == 0:
                     z[i] = x
@@ -677,7 +724,7 @@ class MultiscaleFlow(nn.Module):
 
             if self._latent_shapes is None:
                 zs = z if isinstance(z, (list, tuple)) else [z]
-                self._latent_shapes = [tuple(zi.shape[1:]) for zi in zs] 
+                self._latent_shapes = [tuple(zi.shape[1:]) for zi in zs]
                 self._x_shape = tuple(x.shape[1:])
 
         return z, log_det

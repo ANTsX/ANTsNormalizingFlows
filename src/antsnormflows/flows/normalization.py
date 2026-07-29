@@ -30,6 +30,18 @@ class ActNorm(AffineConstFlow):
         # product of all spatial dims after N and C
         return int(math.prod(z.shape[2:])) if len(z.shape) > 2 else 1
 
+    @staticmethod
+    def _check_finite(name: str, t: torch.Tensor, context: str) -> None:
+        if not torch.isfinite(t).all():
+            n_bad = int((~torch.isfinite(t)).sum().item())
+            raise RuntimeError(
+                f"[ActNorm] non-finite values in '{name}' during {context}: "
+                f"{n_bad}/{t.numel()} elements non-finite "
+                f"(min={t[torch.isfinite(t)].min().item() if n_bad < t.numel() else float('nan')}, "
+                f"shape={tuple(t.shape)}). This is the true origin of the NaN -- "
+                f"upstream of wherever autograd's anomaly detector first reports it."
+            )
+
     def _data_dep_init_forward(self, z: torch.Tensor):
         """
         Initialize so that (roughly) out = (z - mean)/std at first batch:
@@ -37,18 +49,22 @@ class ActNorm(AffineConstFlow):
         """
         assert self.s is not None and self.t is not None
         with torch.no_grad():
+            self._check_finite("z", z, "forward data-dependent init (input)")
             # compute stats at a stable precision (>= fp32, preserving fp64)
             stable_dtype = stable_fp_dtype(z)
             mean = z.to(stable_dtype).mean(dim=self.batch_dims, keepdim=True)
             std  = z.to(stable_dtype).std( dim=self.batch_dims, keepdim=True) + 1e-6
+            self._check_finite("std", std, "forward data-dependent init")
             s_init = -torch.log(std)                              # log-scale
             s_init = self._bound_log_s(s_init, self.log_s_cap)    # bound at init
+            self._check_finite("s_init", s_init, "forward data-dependent init")
             self.s.copy_(s_init.to(self.s.dtype))                 # store log-scale
 
             # t = -mean * exp(s)  (compute exp at stable precision)
             with torch.amp.autocast('cuda', enabled=False):
                 exp_s = torch.exp(self.s.to(stable_dtype))
             self.t.copy_((-mean * exp_s).to(self.t.dtype))
+            self._check_finite("t", self.t, "forward data-dependent init")
 
             # IMPORTANT: update buffer in-place (don’t rebind the attribute)
             self.data_dep_init_done.fill_(1.0)
@@ -76,17 +92,26 @@ class ActNorm(AffineConstFlow):
 
     def inverse(self, z: torch.Tensor):
         stable_dtype = stable_fp_dtype(z)
-        # (rare path) allow init during inverse if first call happens here
+        # NOTE: for density-estimation training (inverse_and_log_det called
+        # on real data), THIS is the path that actually performs the
+        # data-dependent init on iteration 1 -- forward() is only exercised
+        # by sample()/generation. Despite the old "(rare path)" comment,
+        # it is the primary init path in this training setup, so it gets
+        # the same finiteness instrumentation as _data_dep_init_forward().
         if not (self.data_dep_init_done > 0.0):
             # mirror of forward init (kept for completeness)
             assert self.s is not None and self.t is not None
             with torch.no_grad():
+                self._check_finite("z", z, "inverse data-dependent init (input)")
                 mean = z.to(stable_dtype).mean(dim=self.batch_dims, keepdim=True)
                 std  = z.to(stable_dtype).std( dim=self.batch_dims, keepdim=True) + 1e-6
+                self._check_finite("std", std, "inverse data-dependent init")
                 s_init = torch.log(std)
                 s_init = self._bound_log_s(s_init, self.log_s_cap)
+                self._check_finite("s_init", s_init, "inverse data-dependent init")
                 self.s.copy_(s_init.to(self.s.dtype))
                 self.t.copy_(mean.to(self.t.dtype))
+                self._check_finite("t", self.t, "inverse data-dependent init")
                 self.data_dep_init_done.fill_(1.0)
 
         log_s = self._bound_log_s(self.s, self.log_s_cap)
