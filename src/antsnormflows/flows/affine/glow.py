@@ -103,10 +103,11 @@ class GlowBlock2d(Flow):
 
         for idx, flow in enumerate(reversed(self.flows)):
             z, log_det = flow.inverse(z)
+            z = torch.nan_to_num(z, nan=0.0, posinf=self._gen_clamp, neginf=-self._gen_clamp)
+            z = torch.clamp(z, -self._gen_clamp, self._gen_clamp)
             log_det_tot += log_det
 
         return z, log_det_tot
-
 
 class GlowBlock3d(Flow):
     """Glow: Generative Flow with Invertible 1×1x1 Convolutions, [arXiv: 1807.03039](https://arxiv.org/abs/1807.03039)
@@ -216,6 +217,8 @@ class GlowBlock3d(Flow):
 
         for idx, flow in enumerate(reversed(self.flows)):
             z, log_det = flow.inverse(z)
+            z = torch.nan_to_num(z, nan=0.0, posinf=self._gen_clamp, neginf=-self._gen_clamp)
+            z = torch.clamp(z, -self._gen_clamp, self._gen_clamp)
             log_det_tot += log_det
 
         return z, log_det_tot
