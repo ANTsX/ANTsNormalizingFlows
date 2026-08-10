@@ -24,6 +24,7 @@ class GlowBlock2d(Flow):
         s_cap=2.0,
         conv_s_cap=None,
         actnorm_s_cap=None,
+        gen_clamp=1.0e4,
     ):
         """
         conv_s_cap: optional override for the Invertible1x1Conv's own log-scale
@@ -38,6 +39,18 @@ class GlowBlock2d(Flow):
         requested scale_cap) instead of its own hardcoded default (5.0). Pass
         an explicit value to reproduce the pre-fix behavior for checkpoints
         trained before ActNorm correctly received `s_cap`.
+        gen_clamp: symmetric bound applied to the block's output tensor
+        (via nan_to_num + clamp) after each sub-flow, in BOTH forward() and
+        inverse() -- a local blowup in one channel would otherwise
+        contaminate the whole tensor within a couple of blocks, since
+        Invertible1x1Conv mixes all channels linearly. Default 1.0e4
+        matches the value this was previously hardcoded to; pass an
+        explicit value to reproduce checkpoints trained under a different
+        hardcoded default, or to tighten/loosen the safety margin. This is
+        a safety net, not a tuning knob for accuracy -- if training hits
+        this bound often, that is a signal to investigate the underlying
+        instability (e.g. via the same s_cap/conv_s_cap/actnorm_s_cap
+        parameters) rather than to raise gen_clamp further.
         """
         super().__init__()
         self.flows = nn.ModuleList([])
@@ -80,12 +93,14 @@ class GlowBlock2d(Flow):
             ))
         self.flows.append(AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap))
 
-        # Bound applied only in the generative direction (sample()), after
-        # each sub-flow, to stop a local blowup from cascading through the
-        # remaining blocks -- Invertible1x1Conv mixes all channels linearly,
-        # so a single non-finite channel otherwise contaminates the whole
-        # tensor within a couple of blocks. Does not affect inverse()/training.
-        self._gen_clamp = 1.0e4
+        # Bound applied in BOTH directions (forward()/generation AND
+        # inverse()/training), after each sub-flow, to stop a local
+        # blowup from cascading through the remaining blocks --
+        # Invertible1x1Conv mixes all channels linearly, so a single
+        # non-finite channel otherwise contaminates the whole tensor
+        # within a couple of blocks. Configurable via `gen_clamp`; see
+        # its docstring above for checkpoint-compatibility notes.
+        self._gen_clamp = float(gen_clamp)
 
     def forward(self, z):
         log_det_tot = torch.zeros(z.shape[0], dtype=z.dtype, device=z.device)
@@ -133,6 +148,7 @@ class GlowBlock3d(Flow):
         s_cap=2.0,
         conv_s_cap=None,
         actnorm_s_cap=None,
+        gen_clamp=1.0e4,
     ):
         """Constructor
 
@@ -155,6 +171,19 @@ class GlowBlock3d(Flow):
             hardcoded default (5.0). Pass an explicit value to reproduce the
             pre-fix behavior for checkpoints trained before ActNorm correctly
             received `s_cap`.
+          gen_clamp: symmetric bound applied to the block's output tensor
+            (via nan_to_num + clamp) after each sub-flow, in BOTH forward()
+            and inverse() -- a local blowup in one channel would otherwise
+            contaminate the whole tensor within a couple of blocks, since
+            Invertible1x1x1Conv mixes all channels linearly. Default 1.0e4
+            matches the value this was previously hardcoded to; pass an
+            explicit value to reproduce checkpoints trained under a
+            different hardcoded default, or to tighten/loosen the safety
+            margin. This is a safety net, not a tuning knob for accuracy --
+            if training hits this bound often, that is a signal to
+            investigate the underlying instability (e.g. via
+            s_cap/conv_s_cap/actnorm_s_cap) rather than to raise gen_clamp
+            further.
         """
         super().__init__()
         self.flows = nn.ModuleList([])
@@ -194,12 +223,14 @@ class GlowBlock3d(Flow):
             )]
         self.flows += [AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap)]
 
-        # Bound applied only in the generative direction (sample()), after
-        # each sub-flow, to stop a local blowup from cascading through the
-        # remaining blocks -- Invertible1x1x1Conv mixes all channels linearly,
-        # so a single non-finite channel otherwise contaminates the whole
-        # tensor within a couple of blocks. Does not affect inverse()/training.
-        self._gen_clamp = 1.0e4
+        # Bound applied in BOTH directions (forward()/generation AND
+        # inverse()/training), after each sub-flow, to stop a local
+        # blowup from cascading through the remaining blocks --
+        # Invertible1x1x1Conv mixes all channels linearly, so a single
+        # non-finite channel otherwise contaminates the whole tensor
+        # within a couple of blocks. Configurable via `gen_clamp`; see
+        # its docstring above for checkpoint-compatibility notes.
+        self._gen_clamp = float(gen_clamp)
 
     def forward(self, z):
         log_det_tot = torch.zeros(z.shape[0], dtype=z.dtype, device=z.device)
