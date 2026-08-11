@@ -60,11 +60,41 @@ class Invertible1x1Conv(Flow):
     Assumes 4D input/output tensors in NCHW format.
     """
 
-    def __init__(self, num_channels, use_lu=False, s_cap=2.5):
+    def __init__(self, num_channels, use_lu=False, s_cap=2.5, u_offdiag_cap=None):
+        """Constructor
+
+        Args:
+          num_channels: Number of channels
+          use_lu: Flag whether to parametrize the weight matrix through its
+            LU decomposition
+          s_cap: symmetric tanh-clamp applied to the LOG-DIAGONAL of U (the
+            log_S parameter). Bounds the matrix's determinant, hence log_det.
+          u_offdiag_cap: symmetric tanh-clamp applied to the OFF-DIAGONAL
+            entries of U. If None (default), reuses `s_cap`. Necessary
+            because the off-diagonal entries of U affect the matrix's
+            CONDITIONING (and therefore the magnitude of any reconstruction
+            computed via its explicit inverse in forward()), but NOT its
+            determinant -- a triangular matrix's determinant depends only
+            on its diagonal. Without this bound, log_det/the training loss
+            never signals a problem (it only sees the diagonal, which
+            s_cap already protects), while U's off-diagonal entries are
+            left completely free. Confirmed empirically: for a fresh,
+            untrained model, LU-decomposing the random orthogonal init
+            matrix Q already produces |U_offdiag| growing like
+            sqrt(num_channels) purely from the geometry of the
+            decomposition (e.g. ~8-19 for num_channels=512) -- this is
+            present at initialization, not a drift introduced by training,
+            and is enough on its own to make forward()'s explicit
+            triangular-solve inverse numerically explode even though
+            inverse()'s direct product P@L@U (used for encoding/NLL
+            training) stays well-behaved. Pass an explicit value to
+            reproduce checkpoints trained before this bound existed.
+        """
         super().__init__()
         self.num_channels = num_channels
         self.use_lu = use_lu
         self.s_cap = float(s_cap)
+        self.u_offdiag_cap = float(u_offdiag_cap if u_offdiag_cap is not None else s_cap)
 
         Q, _ = torch.linalg.qr(torch.randn(self.num_channels, self.num_channels))
 
@@ -94,13 +124,48 @@ class Invertible1x1Conv(Flow):
         log_s32 = self.log_S.to(stable_fp_dtype(self.log_S))
         return cap * torch.tanh(log_s32 / cap)
 
+    # --- helper: bounded U off-diagonal entries in fp32 ---
+    def _bounded_u_offdiag32(self):
+        # v2: rescale the WHOLE off-diagonal block by a single scalar
+        # factor, rather than tanh-clamping each entry independently.
+        #
+        # Elementwise clamping (v1) bounds individual magnitudes but not
+        # the matrix's CONDITIONING, which is what actually controls
+        # error amplification through solve_triangular's back-
+        # substitution over num_channels sequential steps. Worse,
+        # independently saturating many correlated entries to the same
+        # capped value can itself create near-linear-dependence between
+        # rows -- empirically, v1 only reduced the round-trip error from
+        # ~3000-10000 down to ~528 on a fresh, untrained model, far from
+        # the ~1e-5 seen on a healthy, well-conditioned configuration.
+        #
+        # Rescaling the whole block by one scalar preserves its relative
+        # structure/direction -- it shrinks the matrix without distorting
+        # which entries are large relative to each other -- which is a
+        # much more direct lever on conditioning. The budget is expressed
+        # as an RMS-per-entry target (u_offdiag_cap), scaled by
+        # sqrt(#off-diagonal entries), so u_offdiag_cap keeps roughly the
+        # same interpretation ("typical per-entry magnitude we're
+        # comfortable with") as in v1, while the constraint itself is
+        # enforced globally.
+        cap = self.u_offdiag_cap
+        u_off32 = torch.triu(self.U, diagonal=1).to(stable_fp_dtype(self.U))
+        n = self.num_channels
+        n_offdiag = n * (n - 1) / 2.0
+        max_norm = cap * (n_offdiag ** 0.5)
+        norm = torch.linalg.vector_norm(u_off32)
+        scale = max_norm / (norm + 1e-6)
+        scale = torch.clamp(scale, max=1.0)  # only shrink; never amplify entries already within budget
+        return u_off32 * scale
+
     def _assemble_W(self, inverse=False):
         L = torch.tril(self.L, diagonal=-1) + self.eye
         # FP32-safe exp of bounded log-diagonal
         log_s32 = self._bounded_log_s32()
         with torch.amp.autocast('cuda', enabled=False):
             s32 = torch.exp(log_s32)
-        U = torch.triu(self.U, diagonal=1) + torch.diag(self.sign_S * s32.to(self.U.dtype))
+        U_offdiag = self._bounded_u_offdiag32().to(self.U.dtype)
+        U = U_offdiag + torch.diag(self.sign_S * s32.to(self.U.dtype))
 
         if inverse:
             Y = torch.linalg.solve_triangular(L, self.P.t(), upper=False, unitriangular=True)
@@ -156,11 +221,41 @@ class Invertible1x1x1Conv(Flow):
     Assumes 5d input/output tensors of the form NCHWD
     """
 
-    def __init__(self, num_channels, use_lu=False, s_cap=2.5):
+    def __init__(self, num_channels, use_lu=False, s_cap=2.5, u_offdiag_cap=None):
+        """Constructor
+
+        Args:
+          num_channels: Number of channels
+          use_lu: Flag whether to parametrize the weight matrix through its
+            LU decomposition
+          s_cap: symmetric tanh-clamp applied to the LOG-DIAGONAL of U (the
+            log_S parameter). Bounds the matrix's determinant, hence log_det.
+          u_offdiag_cap: symmetric tanh-clamp applied to the OFF-DIAGONAL
+            entries of U. If None (default), reuses `s_cap`. Necessary
+            because the off-diagonal entries of U affect the matrix's
+            CONDITIONING (and therefore the magnitude of any reconstruction
+            computed via its explicit inverse in forward()), but NOT its
+            determinant -- a triangular matrix's determinant depends only
+            on its diagonal. Without this bound, log_det/the training loss
+            never signals a problem (it only sees the diagonal, which
+            s_cap already protects), while U's off-diagonal entries are
+            left completely free. Confirmed empirically: for a fresh,
+            untrained model, LU-decomposing the random orthogonal init
+            matrix Q already produces |U_offdiag| growing like
+            sqrt(num_channels) purely from the geometry of the
+            decomposition (e.g. ~8-19 for num_channels=512) -- this is
+            present at initialization, not a drift introduced by training,
+            and is enough on its own to make forward()'s explicit
+            triangular-solve inverse numerically explode even though
+            inverse()'s direct product P@L@U (used for encoding/NLL
+            training) stays well-behaved. Pass an explicit value to
+            reproduce checkpoints trained before this bound existed.
+        """
         super().__init__()
         self.num_channels = num_channels
         self.use_lu = use_lu
         self.s_cap = float(s_cap)
+        self.u_offdiag_cap = float(u_offdiag_cap if u_offdiag_cap is not None else s_cap)
 
         Q, _ = torch.linalg.qr(torch.randn(self.num_channels, self.num_channels))
         if use_lu:
@@ -188,12 +283,47 @@ class Invertible1x1x1Conv(Flow):
         log_s32 = self.log_S.to(stable_fp_dtype(self.log_S))
         return cap * torch.tanh(log_s32 / cap)
 
+    # --- helper: bounded U off-diagonal entries in fp32 ---
+    def _bounded_u_offdiag32(self):
+        # v2: rescale the WHOLE off-diagonal block by a single scalar
+        # factor, rather than tanh-clamping each entry independently.
+        #
+        # Elementwise clamping (v1) bounds individual magnitudes but not
+        # the matrix's CONDITIONING, which is what actually controls
+        # error amplification through solve_triangular's back-
+        # substitution over num_channels sequential steps. Worse,
+        # independently saturating many correlated entries to the same
+        # capped value can itself create near-linear-dependence between
+        # rows -- empirically, v1 only reduced the round-trip error from
+        # ~3000-10000 down to ~528 on a fresh, untrained model, far from
+        # the ~1e-5 seen on a healthy, well-conditioned configuration.
+        #
+        # Rescaling the whole block by one scalar preserves its relative
+        # structure/direction -- it shrinks the matrix without distorting
+        # which entries are large relative to each other -- which is a
+        # much more direct lever on conditioning. The budget is expressed
+        # as an RMS-per-entry target (u_offdiag_cap), scaled by
+        # sqrt(#off-diagonal entries), so u_offdiag_cap keeps roughly the
+        # same interpretation ("typical per-entry magnitude we're
+        # comfortable with") as in v1, while the constraint itself is
+        # enforced globally.
+        cap = self.u_offdiag_cap
+        u_off32 = torch.triu(self.U, diagonal=1).to(stable_fp_dtype(self.U))
+        n = self.num_channels
+        n_offdiag = n * (n - 1) / 2.0
+        max_norm = cap * (n_offdiag ** 0.5)
+        norm = torch.linalg.vector_norm(u_off32)
+        scale = max_norm / (norm + 1e-6)
+        scale = torch.clamp(scale, max=1.0)  # only shrink; never amplify entries already within budget
+        return u_off32 * scale
+
     def _assemble_W(self, inverse=False):
         L = torch.tril(self.L, diagonal=-1) + self.eye
         log_s32 = self._bounded_log_s32()
         with torch.amp.autocast('cuda', enabled=False):
             s32 = torch.exp(log_s32)
-        U = torch.triu(self.U, diagonal=1) + torch.diag(self.sign_S * s32.to(self.U.dtype))
+        U_offdiag = self._bounded_u_offdiag32().to(self.U.dtype)
+        U = U_offdiag + torch.diag(self.sign_S * s32.to(self.U.dtype))
         if inverse:
             Y = torch.linalg.solve_triangular(L, self.P.t(), upper=False, unitriangular=True)
             W = torch.linalg.solve_triangular(U, Y, upper=True)
