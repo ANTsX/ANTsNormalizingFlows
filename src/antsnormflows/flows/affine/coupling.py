@@ -133,7 +133,7 @@ class AffineCoupling(Flow):
     Affine Coupling layer as introduced RealNVP paper, see arXiv: 1605.08803
     """
 
-    def __init__(self, param_map, scale=True, scale_map="exp", s_cap=None):
+    def __init__(self, param_map, scale=True, scale_map="exp", s_cap=None, t_cap=None):
         """Constructor
 
         Args:
@@ -142,24 +142,43 @@ class AffineCoupling(Flow):
           scale_map: Map to be applied to the scale parameter, can be 'exp' as in RealNVP or 'sigmoid' as in Glow,
                      'sigmoid_inv' uses multiplicative sigmoid scale when sampling from the model
           s_cap: Optional symmetric cap for scale_ via tanh clamp (stability); if None, no clamp applied.
+          t_cap: Optional symmetric cap for the additive shift via tanh clamp. Unlike
+            scale_ (bounded by scale_map/s_cap already), the shift term is otherwise
+            completely unbounded -- param_map is a plain conv net with no output
+            nonlinearity on this half of its output. During training param_map only
+            ever sees in-distribution z1 (real encoded data), so shift stays small and
+            this is never triggered. During generation (forward(), used by sample()),
+            z1 can drift out of distribution at temperature > 1 or after many stacked
+            blocks; param_map then extrapolates and shift can blow up, compounding
+            multiplicatively block-to-block since z1 for the next block is exactly this
+            block's z2 output. If None (default), no clamp applied -- reproduces exact
+            prior behavior/checkpoints. Pass a generous value (loose relative to typical
+            in-distribution activation magnitude) to stop this runaway without touching
+            normal-range behavior.
         """
         super().__init__()
         self.add_module("param_map", param_map)
         self.scale = scale
         self.scale_map = scale_map
         self.s_cap = s_cap
+        self.t_cap = t_cap
 
     def _bound(self, s_raw):
         if self.s_cap is None:
             return s_raw
         return self.s_cap * torch.tanh(s_raw / self.s_cap)
 
+    def _bound_t(self, t_raw):
+        if self.t_cap is None:
+            return t_raw
+        return self.t_cap * torch.tanh(t_raw / self.t_cap)
+
     def forward(self, z):
         z1, z2 = z
         param = self.param_map(z1)
 
         if self.scale:
-            shift = param[:, 0::2, ...]
+            shift = self._bound_t(param[:, 0::2, ...])
             scale_ = self._bound(param[:, 1::2, ...])
             reduce_dims = list(range(1, shift.dim()))
 
@@ -193,7 +212,7 @@ class AffineCoupling(Flow):
         param = self.param_map(z1)
 
         if self.scale:
-            shift = param[:, 0::2, ...]
+            shift = self._bound_t(param[:, 0::2, ...])
             scale_ = self._bound(param[:, 1::2, ...])
             reduce_dims = list(range(1, shift.dim()))
 
@@ -330,7 +349,7 @@ class AffineCouplingBlock(Flow):
     Affine Coupling layer including split and merge operation
     """
 
-    def __init__(self, param_map, scale=True, scale_map="tanh", split_mode="channel", s_cap=3.0):
+    def __init__(self, param_map, scale=True, scale_map="tanh", split_mode="channel", s_cap=3.0, t_cap=None):
         """Constructor
 
         Args:
@@ -339,13 +358,15 @@ class AffineCouplingBlock(Flow):
           scale_map: Map to be applied to the scale parameter, can be 'exp' as in RealNVP or 'sigmoid' as in Glow
           split_mode: Splitting mode, for possible values see Split class
           s_cap: optional tanh clamp for the internal AffineCoupling's scale head
+          t_cap: optional tanh clamp for the internal AffineCoupling's shift head;
+            see AffineCoupling's docstring. None (default) reproduces prior behavior.
         """
         super().__init__()
         self.flows = nn.ModuleList([])
         # Split layer
         self.flows += [Split(split_mode)]
         # Affine coupling layer (optionally bounded)
-        self.flows += [AffineCoupling(param_map, scale, scale_map, s_cap=s_cap)]
+        self.flows += [AffineCoupling(param_map, scale, scale_map, s_cap=s_cap, t_cap=t_cap)]
         # Merge layer
         self.flows += [Merge(split_mode)]
 

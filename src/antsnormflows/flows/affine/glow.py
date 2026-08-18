@@ -149,6 +149,7 @@ class GlowBlock3d(Flow):
         conv_s_cap=None,
         actnorm_s_cap=None,
         gen_clamp=1.0e4,
+        shift_cap=None,
     ):
         """Constructor
 
@@ -171,6 +172,15 @@ class GlowBlock3d(Flow):
             hardcoded default (5.0). Pass an explicit value to reproduce the
             pre-fix behavior for checkpoints trained before ActNorm correctly
             received `s_cap`.
+          shift_cap: optional tanh clamp on the affine coupling's additive
+            shift term (see AffineCoupling's docstring for why this exists
+            separately from s_cap/conv_s_cap/actnorm_s_cap -- shift has no
+            bounding nonlinearity of its own and can compound block-to-block
+            once inputs drift out of the training distribution, e.g. when
+            sampling at temperature > 1). None (default) reproduces exact
+            prior behavior/checkpoints; pass a value generous relative to
+            typical in-distribution activation magnitude to add a safety
+            margin without perturbing normal-range sampling/reconstruction.
           gen_clamp: symmetric bound applied to the block's output tensor
             (via nan_to_num + clamp) after each sub-flow, in BOTH forward()
             and inverse() -- a local blowup in one channel would otherwise
@@ -221,7 +231,7 @@ class GlowBlock3d(Flow):
                 channels, use_lu,
                 s_cap=(conv_s_cap if conv_s_cap is not None else s_cap),
             )]
-        self.flows += [AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap)]
+        self.flows += [AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap, t_cap=shift_cap)]
 
         # Bound applied in BOTH directions (forward()/generation AND
         # inverse()/training), after each sub-flow, to stop a local
