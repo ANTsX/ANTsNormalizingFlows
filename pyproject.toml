@@ -37,6 +37,14 @@ docs = [
   "sphinx-design>=0.6",
   "sphinx-rtd-theme>=2.0",
 ]
+examples = [
+  "matplotlib",
+  "jupyterlab",
+  "tqdm",
+  "scikit-learn",
+  "ipywidgets",
+  "pandas",
+]
 
 [tool.setuptools]
 zip-safe = false
@@ -52,7 +60,6 @@ antsnormflows = ["py.typed"]
 [tool.setuptools.dynamic]
 version = { attr = "antsnormflows._version.__version__" }
 dependencies = { file = ["requirements.txt"] }
-optional-dependencies.examples = { file = ["requirements_examples.txt"] }
 
 [tool.pytest.ini_options]
 addopts = "-ra -q --strict-markers"
