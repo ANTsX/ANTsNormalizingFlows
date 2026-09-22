@@ -109,13 +109,13 @@ jobs:
         # Clear the source-tree pythonpath setting and avoid prepending test paths.
         run: python -m pytest --import-mode=importlib -o pythonpath= tests
 
-  publish-testpypi:
-    name: Publish wheel to TestPyPI
+  publish-pypi:
+    name: Publish wheel to PyPI
     needs: [build, test]
     runs-on: ubuntu-24.04
     environment:
-      name: testpypi
-      url: https://test.pypi.org/p/antsnormflows
+      name: antsnormflowspypi
+      url: https://pypi.org/p/antsnormflows
     permissions:
       id-token: write
     steps:
@@ -124,10 +124,8 @@ jobs:
           name: release-wheel
           path: dist
 
-      - name: Publish to TestPyPI
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
 
   attach-wheel:
     name: Attach wheel to GitHub release
