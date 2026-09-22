@@ -90,9 +90,17 @@ jobs:
           name: release-wheel
           path: dist
 
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install CPU-only PyTorch on Linux
+        if: runner.os == 'Linux'
+        # Hosted Ubuntu runners have no GPU. Avoid pulling in CUDA dependencies,
+        # including NVIDIA packages that cannot install on the ARM64 runner.
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
       - name: Install wheel and its test dependencies
         run: |
-          python -m pip install --upgrade pip
           wheels=(dist/*.whl)
           python -m pip install "${wheels[0]}[test]"
           python -m pip check
