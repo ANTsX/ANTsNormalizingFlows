@@ -32,6 +32,34 @@ jobs:
           python -m build --wheel
           python -m twine check --strict dist/*.whl
 
+      - name: Verify wheel version matches release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          from email.parser import BytesParser
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = list(Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              sys.exit(f"Expected exactly one wheel, found {len(wheels)}")
+
+          with ZipFile(wheels[0]) as wheel:
+              metadata_path, = (
+                  name for name in wheel.namelist()
+                  if name.endswith(".dist-info/METADATA")
+              )
+              version = BytesParser().parsebytes(wheel.read(metadata_path))["Version"]
+
+          tag = os.environ["RELEASE_TAG"]
+          if not version or version != tag.removeprefix("v"):
+              sys.exit(f"Wheel version {version!r} does not match release tag {tag!r}")
+          print(f"Wheel version {version!r} matches release tag {tag!r}")
+          PY
+
       - name: Save wheel for testing and publishing
         uses: actions/upload-artifact@v7
         with:
