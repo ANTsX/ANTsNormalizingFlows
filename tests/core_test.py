@@ -4,7 +4,7 @@ import torch
 from torch.testing import assert_close
 from antsnormflows import NormalizingFlow, ClassCondFlow, \
     MultiscaleFlow, NormalizingFlowVAE, \
-    ConditionalNormalizingFlow
+    ConditionalNormalizingFlow, ConvFlow1d
 from antsnormflows.flows import MaskedAffineFlow, \
     GlowBlock2d, GlowBlock3d, Merge, \
     Squeeze2d, Squeeze3d, MaskedAffineAutoregressive, \
@@ -339,6 +339,91 @@ class CoreTest(unittest.TestCase):
             x_recon, _ = model.forward_and_log_det(z)
             is_close = torch.allclose(x, x_recon, atol=1e-4)
             assert is_close
+
+    def test_conv_flow_1d(self):
+        batch_size = 4
+        channels = 8
+        length = 16
+        for use_glow, padding_mode, actnorm in [
+            (False, "zeros", False),
+            (False, "circular", True),
+            (True, "zeros", False),
+            (True, "circular", False),
+        ]:
+            with self.subTest(use_glow=use_glow, padding_mode=padding_mode, actnorm=actnorm):
+                torch.manual_seed(0)
+                model = ConvFlow1d(
+                    channels=channels,
+                    length=length,
+                    K=4,
+                    hidden_channels=16,
+                    scale_cap=0.5,
+                    use_glow_blocks=use_glow,
+                    actnorm=actnorm,
+                    padding_mode=padding_mode,
+                ).double()
+                x = torch.randn(batch_size, channels, length, dtype=torch.float64)
+
+                # Test log prob and sampling
+                log_p = model.log_prob(x)
+                assert log_p.shape == (batch_size,)
+                s, log_qs = model.sample(batch_size)
+                assert s.shape == (batch_size, channels, length)
+                assert log_qs.shape == (batch_size,)
+
+                # Test training loss (NLL)
+                loss = model.forward_kld(x)
+                assert loss.dim() == 0
+
+                # Perturb weights so the coupling networks are not the identity
+                gen = torch.Generator().manual_seed(1)
+                with torch.no_grad():
+                    for p in model.parameters():
+                        p.add_(0.05 * torch.randn(p.shape, generator=gen, dtype=p.dtype))
+
+                # Test forward and inverse round-trip
+                z, log_det = model.inverse_and_log_det(x)
+                x_recon, log_det_fwd = model.forward_and_log_det(z)
+                assert_close(x_recon, x, atol=1e-8, rtol=1e-8)
+                assert_close(log_det + log_det_fwd, torch.zeros_like(log_det), atol=1e-8, rtol=1e-8)
+
+                # log_prob is consistent with a brute-force Jacobian of the inverse map
+                x1 = x[:1]
+                f = lambda v: model.inverse_and_log_det(v.view(1, channels, length))[0].reshape(-1)
+                J = torch.autograd.functional.jacobian(f, x1.reshape(-1))
+                z1, ld1 = model.inverse_and_log_det(x1)
+                assert_close(ld1[0], torch.linalg.slogdet(J)[1], atol=1e-8, rtol=1e-8)
+                assert_close(model.log_prob(x1), model.q0.log_prob(z1) + ld1, atol=1e-8, rtol=1e-8)
+
+    def test_conv_flow_1d_sample_temperature(self):
+        torch.manual_seed(0)
+        model = ConvFlow1d(channels=4, length=8, K=2, hidden_channels=8)
+        x0, _ = model.sample(2000, temperature=0.5)
+        x1, _ = model.sample(2000)
+        # Fresh flow is (almost) the identity, so the sample std follows the temperature.
+        self.assertAlmostEqual(x0.std().item() / x1.std().item(), 0.5, delta=0.05)
+        # Temperature is restored: log_prob is unchanged by sampling.
+        self.assertIsNone(model.q0.temperature)
+
+    def test_conv_flow_1d_actnorm_cap(self):
+        # Unstandardized inputs (e.g. keypoints in pixels): with the default
+        # actnorm_s_cap the data-dependent ActNorm init standardizes them,
+        # whereas a tight cap (the former default, tied to scale_cap=0.5)
+        # cannot.
+        torch.manual_seed(0)
+        channels, length = 8, 16
+        x = 300.0 + 80.0 * torch.randn(32, channels, length)
+        for use_glow in [False, True]:
+            for cap, standardized in [(5.0, True), (0.5, False)]:
+                with self.subTest(use_glow=use_glow, actnorm_s_cap=cap):
+                    model = ConvFlow1d(
+                        channels=channels, length=length, K=2, hidden_channels=8,
+                        use_glow_blocks=use_glow, actnorm=True, actnorm_s_cap=cap,
+                    )
+                    model.log_prob(x)  # data-dependent ActNorm init
+                    z, _ = model.inverse_and_log_det(x)
+                    self.assertEqual(abs(z.std().item() - 1.0) < 0.1, standardized)
+
 
 if __name__ == "__main__":
     unittest.main()

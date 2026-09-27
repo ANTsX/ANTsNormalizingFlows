@@ -36,6 +36,8 @@ class Permute(Flow):
             z1 = z[:, : self.num_channels // 2, ...]
             z2 = z[:, self.num_channels // 2 :, ...]
             z = torch.cat([z2, z1], dim=1)
+        elif self.mode == "reverse":
+            z = z.flip(1)
         else:
             raise NotImplementedError("The mode " + self.mode + " is not implemented.")
         log_det = torch.zeros(len(z), device=z.device)
@@ -48,6 +50,8 @@ class Permute(Flow):
             z1 = z[:, : (self.num_channels + 1) // 2, ...]
             z2 = z[:, (self.num_channels + 1) // 2 :, ...]
             z = torch.cat([z2, z1], dim=1)
+        elif self.mode == "reverse":
+            z = z.flip(1)
         else:
             raise NotImplementedError("The mode " + self.mode + " is not implemented.")
         log_det = torch.zeros(len(z), device=z.device)
@@ -212,6 +216,49 @@ class Invertible1x1Conv(Flow):
 
         W = W.view(self.num_channels, self.num_channels, 1, 1).to(z.dtype)
         z_ = torch.nn.functional.conv2d(z, W)
+        return z_, log_det
+
+
+class Invertible1x1Conv1d(Invertible1x1Conv):
+    """
+    Invertible 1x1 convolution for 1D sequences and signals in NCL format.
+    """
+
+    def forward(self, z):
+        if self.use_lu:
+            W = self._assemble_W(inverse=True)
+            log_s32 = self._bounded_log_s32()
+            length = z.size(2)
+            log_det = (-log_s32.sum() * length).to(z.dtype)
+        else:
+            W32 = self.W.to(stable_fp_dtype(self.W))
+            with torch.amp.autocast('cuda', enabled=False):
+                sign, logabsdet = torch.slogdet(W32)
+            length = z.size(2)
+            log_det = (-logabsdet * length).to(z.dtype)
+            W_dtype = self.W.dtype
+            W = torch.inverse(self.W) if W_dtype == torch.float64 else torch.inverse(self.W.double()).type(W_dtype)
+
+        W = W.view(self.num_channels, self.num_channels, 1).to(z.dtype)
+        z_ = torch.nn.functional.conv1d(z, W)
+        return z_, log_det
+
+    def inverse(self, z):
+        if self.use_lu:
+            W = self._assemble_W()
+            log_s32 = self._bounded_log_s32()
+            length = z.size(2)
+            log_det = (log_s32.sum() * length).to(z.dtype)
+        else:
+            W = self.W
+            W32 = W.to(stable_fp_dtype(W))
+            with torch.amp.autocast('cuda', enabled=False):
+                sign, logabsdet = torch.slogdet(W32)
+            length = z.size(2)
+            log_det = (logabsdet * length).to(z.dtype)
+
+        W = W.view(self.num_channels, self.num_channels, 1).to(z.dtype)
+        z_ = torch.nn.functional.conv1d(z, W)
         return z_, log_det
 
 

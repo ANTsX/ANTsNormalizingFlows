@@ -3,7 +3,7 @@ from torch import nn
 
 from ..base import Flow
 from .coupling import AffineCouplingBlock
-from ..mixing import Invertible1x1Conv, Invertible1x1x1Conv
+from ..mixing import Invertible1x1Conv, Invertible1x1Conv1d, Invertible1x1x1Conv
 from ..normalization import ActNorm
 from ... import nets
 
@@ -255,11 +255,113 @@ class GlowBlock3d(Flow):
 
     def inverse(self, z):
         log_det_tot = torch.zeros(z.shape[0], dtype=z.dtype, device=z.device)
-
         for idx, flow in enumerate(reversed(self.flows)):
             z, log_det = flow.inverse(z)
             z = torch.nan_to_num(z, nan=0.0, posinf=self._gen_clamp, neginf=-self._gen_clamp)
             z = torch.clamp(z, -self._gen_clamp, self._gen_clamp)
             log_det_tot += log_det
+        return z, log_det_tot
 
+
+class GlowBlock1d(Flow):
+    """
+    Glow: Generative Flow with Invertible 1x1 Convolutions for 1D sequences/signals in NCL format.
+
+    One step = ActNorm -> Invertible1x1Conv1d -> AffineCouplingBlock (ConvNet1d).
+
+    Args:
+      channels: Number of input channels
+      hidden_channels: Hidden channels of the coupling network
+      scale: Affine (True) or additive (False) coupling
+      scale_map: Scale activation of the coupling
+      split_mode: "channel" or "channel_inv"
+      leaky: Leaky ReLU slope of the coupling network
+      init_zeros: Zero-initialize the last coupling layer
+      use_lu: LU-parameterize the invertible 1x1 convolution
+      net_actnorm: Use ActNorm inside the coupling network
+      s_cap: Bound on the coupling log-scale (also the default for
+        conv_s_cap and actnorm_s_cap)
+      conv_s_cap: Optional override of the 1x1 conv log-diagonal bound
+      actnorm_s_cap: Optional override of the ActNorm log-scale bound. Note
+        that the ActNorm can only rescale each channel by exp(+/-actnorm_s_cap),
+        so a small s_cap (e.g. 0.5) prevents it from normalizing unscaled
+        inputs such as pixel coordinates; pass a larger value (e.g. 5.0) or
+        standardize the data beforehand.
+      shift_cap: Optional tanh bound on the coupling shift
+      gen_clamp: Clamp applied after every sub-flow
+      kernel_size: Kernel sizes of the three coupling convolutions
+      padding_mode: Padding of the coupling network ("zeros", "circular", ...);
+        use "circular" for periodic signals
+    """
+
+    def __init__(
+        self,
+        channels,
+        hidden_channels,
+        scale=True,
+        scale_map="tanh",
+        split_mode="channel",
+        leaky=0.1,
+        init_zeros=True,
+        use_lu=True,
+        net_actnorm=False,
+        s_cap=2.0,
+        conv_s_cap=None,
+        actnorm_s_cap=None,
+        shift_cap=None,
+        gen_clamp=1.0e4,
+        kernel_size=(3, 1, 3),
+        padding_mode="zeros",
+    ):
+        super().__init__()
+        self.flows = nn.ModuleList([])
+        self.channels = channels
+
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size, 1, kernel_size)
+        kernel_size = tuple(kernel_size)
+        num_param = 2 if scale else 1
+
+        if "channel" == split_mode:
+            channels_ = ((channels + 1) // 2,) + 2 * (hidden_channels,)
+            channels_ += (num_param * (channels // 2),)
+        elif "channel_inv" == split_mode:
+            channels_ = (channels // 2,) + 2 * (hidden_channels,)
+            channels_ += (num_param * ((channels + 1) // 2),)
+        else:
+            raise NotImplementedError("Mode " + split_mode + " is not implemented.")
+        param_map = nets.ConvNet1d(
+            channels_, kernel_size, leaky, init_zeros, actnorm=net_actnorm,
+            padding_mode=padding_mode,
+        )
+
+        self.flows.append(ActNorm(
+            (channels, 1),
+            log_s_cap=(actnorm_s_cap if actnorm_s_cap is not None else s_cap),
+        ))
+        if channels > 1:
+            self.flows.append(Invertible1x1Conv1d(
+                channels, use_lu,
+                s_cap=(conv_s_cap if conv_s_cap is not None else s_cap),
+            ))
+        self.flows.append(AffineCouplingBlock(param_map, scale, scale_map, split_mode, s_cap, t_cap=shift_cap))
+
+        self._gen_clamp = float(gen_clamp)
+
+    def forward(self, z):
+        log_det_tot = torch.zeros(z.shape[0], dtype=z.dtype, device=z.device)
+        for idx, flow in enumerate(self.flows):
+            z, log_det = flow(z)
+            z = torch.nan_to_num(z, nan=0.0, posinf=self._gen_clamp, neginf=-self._gen_clamp)
+            z = torch.clamp(z, -self._gen_clamp, self._gen_clamp)
+            log_det_tot += log_det
+        return z, log_det_tot
+
+    def inverse(self, z):
+        log_det_tot = torch.zeros(z.shape[0], dtype=z.dtype, device=z.device)
+        for idx, flow in enumerate(reversed(self.flows)):
+            z, log_det = flow.inverse(z)
+            z = torch.nan_to_num(z, nan=0.0, posinf=self._gen_clamp, neginf=-self._gen_clamp)
+            z = torch.clamp(z, -self._gen_clamp, self._gen_clamp)
+            log_det_tot += log_det
         return z, log_det_tot

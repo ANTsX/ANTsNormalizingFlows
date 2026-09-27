@@ -912,3 +912,145 @@ class NormalizingFlowVAE(nn.Module):
         log_q = log_q.view(-1, num_samples, *log_q.size()[1:])
         log_p = log_p.view(-1, num_samples, *log_p.size()[1:])
         return z, log_q, log_p
+
+
+class ConvFlow1d(NormalizingFlow):
+    """
+    Single-scale convolutional normalizing flow for 1D signals and sequences
+    of shape (B, C, L).
+
+    Constructs a flow from K alternating 1D coupling blocks (optionally preceded
+    by ActNorm) or K GlowBlock1d steps, with an isotropic Gaussian base
+    distribution over (C, L).
+
+    Notes:
+      * Channels are split into two contiguous halves ("channel" /
+        "channel_inv"). Without Glow blocks, alternating the split mode is the
+        only channel mixing, so the channel order matters: for interleaved
+        2D keypoints (x0, y0, x1, y1, ...) with an odd number of keypoints,
+        one keypoint's x and y end up in different halves. Glow blocks
+        (use_glow_blocks=True) learn the mixing with 1x1 convolutions.
+      * The ActNorm layers can only rescale each channel by
+        exp(+/-actnorm_s_cap). Keep actnorm_s_cap large enough (default 5.0)
+        or standardize inputs (e.g. pixel coordinates) before the flow.
+      * For periodic signals (e.g. a phase-normalized gait cycle), use
+        padding_mode="circular" so that the convolutions wrap around the
+        cycle boundary instead of seeing zero padding.
+
+    Args:
+      channels: Number of signal/sequence channels (e.g. 34 for 17 2D keypoints)
+      length: Sequence length (e.g. 64 time points)
+      K: Number of flow steps
+      hidden_channels: Number of hidden convolution channels in coupling blocks
+      kernel_size: 1D kernel size of the first and last coupling convolutions
+        (the middle one is 1x1), used by both block types (default: 3)
+      scale_cap: Maximum absolute log-scale of the coupling layers (default: 0.5)
+      shift_cap: Optional tanh clamp for the additive shift (default: None)
+      scale_map: Scale activation mapping ("tanh" or "exp", default: "tanh")
+      split_mode_alternate: Alternate "channel" and "channel_inv" across layers (default: True)
+      use_glow_blocks: If True, uses GlowBlock1d (ActNorm + Invertible1x1Conv1d + coupling);
+        if False, uses CouplingBlock1d with alternating split_mode.
+      actnorm: Prepend an ActNorm layer to each coupling block. Only used when
+        use_glow_blocks=False (Glow blocks always contain an ActNorm).
+      actnorm_s_cap: Bound on the ActNorm log-scale (default: 5.0, the ActNorm default)
+      conv_s_cap: Bound on the 1x1 convolution log-diagonal (Glow blocks only;
+        default: scale_cap)
+      leaky: LeakyReLU slope for convolutional sub-networks (default: 0.1)
+      net_actnorm: Whether to use ActNorm inside the coupling sub-networks (default: False)
+      padding_mode: Padding of the coupling convolutions ("zeros" or "circular", default: "zeros")
+      q0: Base distribution (default: DiagGaussian((channels, length)))
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        length: int,
+        K: int = 16,
+        hidden_channels: int = 64,
+        kernel_size: int = 3,
+        scale_cap: float = 0.5,
+        shift_cap: Optional[float] = None,
+        scale_map: str = "tanh",
+        split_mode_alternate: bool = True,
+        use_glow_blocks: bool = False,
+        actnorm: bool = False,
+        actnorm_s_cap: float = 5.0,
+        conv_s_cap: Optional[float] = None,
+        leaky: float = 0.1,
+        net_actnorm: bool = False,
+        padding_mode: str = "zeros",
+        q0: Optional[nn.Module] = None,
+    ):
+        from .flows.affine.coupling import CouplingBlock1d
+        from .flows.affine.glow import GlowBlock1d
+        from .flows.normalization import ActNorm
+
+        flows: List[nn.Module] = []
+        for i in range(K):
+            split_mode = "channel" if (i % 2 == 0 or not split_mode_alternate) else "channel_inv"
+            if use_glow_blocks:
+                flows.append(
+                    GlowBlock1d(
+                        channels=channels,
+                        hidden_channels=hidden_channels,
+                        scale=True,
+                        scale_map=scale_map,
+                        split_mode=split_mode,
+                        leaky=leaky,
+                        net_actnorm=net_actnorm,
+                        s_cap=scale_cap,
+                        conv_s_cap=conv_s_cap,
+                        actnorm_s_cap=actnorm_s_cap,
+                        shift_cap=shift_cap,
+                        kernel_size=(kernel_size, 1, kernel_size),
+                        padding_mode=padding_mode,
+                    )
+                )
+            else:
+                if actnorm:
+                    flows.append(ActNorm((channels, 1), log_s_cap=actnorm_s_cap))
+                flows.append(
+                    CouplingBlock1d(
+                        channels=channels,
+                        hidden_channels=hidden_channels,
+                        kernel_size=kernel_size,
+                        scale=True,
+                        scale_map=scale_map,
+                        split_mode=split_mode,
+                        s_cap=scale_cap,
+                        t_cap=shift_cap,
+                        leaky=leaky,
+                        net_actnorm=net_actnorm,
+                        padding_mode=padding_mode,
+                    )
+                )
+
+        if q0 is None:
+            q0 = distributions.DiagGaussian((channels, length))
+
+        super().__init__(q0=q0, flows=flows)
+        self.channels = channels
+        self.length = length
+
+    @torch.no_grad()
+    def sample(self, num_samples: int = 1, temperature: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Sample from the flow, optionally with a tempered base distribution.
+
+        Args:
+          num_samples: Number of samples to draw
+          temperature: Optional multiplicative factor on the base standard
+            deviation (same convention as ``MultiscaleFlow.sample``). The base
+            distribution's temperature is restored afterwards, so training
+            log-likelihoods are unaffected.
+
+        Returns:
+          Samples, log probability
+        """
+        if temperature is None or not hasattr(self.q0, "temperature"):
+            return super().sample(num_samples)
+        previous = self.q0.temperature
+        self.q0.temperature = temperature
+        try:
+            return super().sample(num_samples)
+        finally:
+            self.q0.temperature = previous
