@@ -383,3 +383,81 @@ class AffineCouplingBlock(Flow):
             z, log_det = self.flows[i].inverse(z)
             log_det_tot += log_det
         return z, log_det_tot
+
+
+class CouplingBlock1d(Flow):
+    """
+    1D Affine Coupling layer for sequence and signal data of shape (B, C, L).
+    Splits channels into two partitions, transforms one partition conditioned on the
+    other via a 1D network (by default ConvNet1d) with bounded log-scales (s_cap * tanh).
+
+    Args:
+      channels: Number of input channels
+      hidden_channels: Hidden channels of the default ConvNet1d parameter map
+      kernel_size: Kernel size of the first and last convolution of the default
+        parameter map (the middle one is 1x1)
+      scale: Affine (True) or additive (False) coupling
+      scale_map: Scale activation ("tanh", "exp", "sigmoid", ...)
+      split_mode: "channel" or "channel_inv"
+      s_cap: Bound on the absolute log-scale
+      t_cap: Optional tanh bound on the shift
+      leaky: Leaky ReLU slope of the default parameter map
+      net_actnorm: Use ActNorm inside the default parameter map
+      padding_mode: Padding of the default parameter map ("zeros", "circular", ...);
+        use "circular" for periodic signals
+      param_map: Optional custom parameter network; overrides the default
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        hidden_channels: int = 64,
+        kernel_size: int = 3,
+        scale: bool = True,
+        scale_map: str = "tanh",
+        split_mode: str = "channel",
+        s_cap: float = 2.0,
+        t_cap: float | None = None,
+        leaky: float = 0.1,
+        net_actnorm: bool = False,
+        padding_mode: str = "zeros",
+        param_map: nn.Module | None = None,
+    ):
+        super().__init__()
+        num_param = 2 if scale else 1
+        if "channel" == split_mode:
+            c1 = (channels + 1) // 2
+            c2 = channels // 2
+        elif "channel_inv" == split_mode:
+            c1 = channels // 2
+            c2 = (channels + 1) // 2
+        else:
+            raise NotImplementedError(f"Mode {split_mode} is not supported for CouplingBlock1d.")
+
+        if param_map is None:
+            from ... import nets
+            channels_ = (c1, hidden_channels, hidden_channels, num_param * c2)
+            kernel_sizes = (kernel_size, 1, kernel_size)
+            param_map = nets.ConvNet1d(
+                channels_,
+                kernel_sizes,
+                leaky=leaky,
+                init_zeros=True,
+                actnorm=net_actnorm,
+                padding_mode=padding_mode,
+            )
+
+        self.block = AffineCouplingBlock(
+            param_map,
+            scale=scale,
+            scale_map=scale_map,
+            split_mode=split_mode,
+            s_cap=s_cap,
+            t_cap=t_cap,
+        )
+
+    def forward(self, z):
+        return self.block(z)
+
+    def inverse(self, z):
+        return self.block.inverse(z)

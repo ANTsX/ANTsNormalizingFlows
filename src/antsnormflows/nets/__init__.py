@@ -8,7 +8,7 @@ from . import (
 
 from .mlp import MLP
 
-from .cnn import ConvNet2d, ConvNet3d
+from .cnn import ConvNet1d, ConvNet2d, ConvNet3d
 
 from .resnet import ResidualNet, ConvResidualNet
 
