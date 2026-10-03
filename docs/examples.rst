@@ -31,17 +31,33 @@ Suggested learning path
 #. Explore Glow and image flows for multiscale image architectures, or the
    variational autoencoder example for latent-variable models.
 
-Notebook compatibility
-----------------------
+Recent convolutional features
+-----------------------------
 
-These notebooks include examples inherited from the upstream project and
-may require adaptation to the current API. In particular, the current
-package exports ``GlowBlock2d`` / ``GlowBlock3d`` and
-``Squeeze2d`` / ``Squeeze3d``. Older cells using ``GlowBlock`` or ``Squeeze``
-need the dimension-specific name (for example, ``Squeeze2d`` in a 2D image
-example). Use ``import antsnormflows as nf`` for this package and consult
-:doc:`api` for current signatures. The self-contained tutorial above is the
-recommended first check of your installation.
+These short notebooks use synthetic data and need no dataset downloads.
+Install the current source checkout to use the latest APIs.
+
+* `Convolutional 1D flows <https://github.com/ANTsX/ANTsNormalizingFlows/blob/main/examples/conv_flow_1d.ipynb>`_:
+  periodic signals, coupling versus Glow blocks, circular padding,
+  temperature sampling, and checkpoints.
+* `Multiscale Glow 3D <https://github.com/ANTsX/ANTsNormalizingFlows/blob/main/examples/glow_3d.ipynb>`_:
+  synthetic volumes, latent shapes, checkpointed training, reconstruction,
+  interpolation, and reloading.
+* `Factorized Glow 3D <https://github.com/ANTsX/ANTsNormalizingFlows/blob/main/examples/factorized_glow_3d.ipynb>`_:
+  per-axis squeezing, spatial/temporal kernels, temporal identity
+  initialization, and comparison with isotropic kernels.
+
+The multiscale example explicitly uses ``inverse_and_log_det`` to populate
+latent shapes before sampling and to exercise gradient checkpointing.
+In the current implementation, ``log_prob`` and ``forward_kld`` do not use
+that checkpointing path or populate the sampling shape cache.
+
+The existing notebooks use the dimension-specific APIs, including
+``GlowBlock2d`` and ``Squeeze2d``. Colab installation cells install the GitHub
+source. Glow and VAE notebooks download CIFAR-10 and MNIST, respectively;
+the image-density notebook uses a synthetic image by default. Long-running
+original experiments retain their training budgets, so reduce them for a
+quick check. Notebook outputs are cleared to avoid displaying stale results.
 
 Normalizing flows
 -----------------
@@ -70,3 +86,19 @@ Colab variants
 * `Glow (Colab) <https://github.com/ANTsX/ANTsNormalizingFlows/blob/main/examples/glow_colab.ipynb>`_
 * `Paper example (Colab) <https://github.com/ANTsX/ANTsNormalizingFlows/blob/main/examples/paper_example_nsf_colab.ipynb>`_
 * `Real NVP (Colab) <https://github.com/ANTsX/ANTsNormalizingFlows/blob/main/examples/real_nvp_colab.ipynb>`_
+
+Command-line VAE experiments
+----------------------------
+
+The ``examples/vae.py`` and ``examples/plain_vae.py`` scripts provide flow
+and baseline VAE experiments. For example, from the repository root:
+
+.. code-block:: bash
+
+   python examples/vae.py --dataset mnist --flow Planar --epochs 1 --no-cuda
+   python examples/plain_vae.py --dataset mnist --epochs 1 --no-cuda
+
+Each script downloads only the selected dataset. CIFAR images are treated
+as separate channel observations by these legacy VAE architectures, not as
+a joint RGB density. ``--experiment_mode --runs 3`` repeats an experiment
+and writes a CSV summary under ``experiments/``.

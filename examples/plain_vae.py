@@ -41,10 +41,10 @@ parser.add_argument(
     help="Dataset to train and test on (mnist, cifar10 or cifar100) (default: mnist)",
 )
 parser.add_argument(
-    "--no-cuda", action="store_true", default=False, help="enables CUDA training"
+    "--no-cuda", action="store_true", default=False, help="disable CUDA training"
 )
 parser.add_argument(
-    "--seed", type=int, default=15, metavar="S", help="Random Seed (default: 1)"
+    "--seed", type=int, default=15, metavar="S", help="Random Seed (default: 15)"
 )
 parser.add_argument(
     "--log-intv",
@@ -55,9 +55,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--experiment_mode",
-    type=bool,
-    default=False,
-    metavar="N",
+    action="store_true",
     help="Experiment mode (conducts 10 runs and saves results as DataFrame (default: False)",
 )
 parser.add_argument(
@@ -146,34 +144,19 @@ def flow_vae_datasets(
     shuffle=True,
     transform=transforms.Compose([transforms.ToTensor(), BinaryTransform()]),
 ):
-    data_d_train = {
-        "mnist": datasets.MNIST(
-            "datasets", train=True, download=True, transform=transform
-        ),
-        "cifar10": datasets.CIFAR10(
-            "datasets", train=True, download=True, transform=transform
-        ),
-        "cifar100": datasets.CIFAR100(
-            "datasets", train=True, download=True, transform=transform
-        ),
-    }
-    data_d_test = {
-        "mnist": datasets.MNIST(
-            "datasets", train=False, download=True, transform=transform
-        ),
-        "cifar10": datasets.CIFAR10(
-            "datasets", train=False, download=True, transform=transform
-        ),
-        "cifar100": datasets.CIFAR100(
-            "datasets", train=False, download=True, transform=transform
-        ),
-    }
+    # Construct only the requested dataset; do not download all three.
+    dataset_class = {
+        "mnist": datasets.MNIST,
+        "cifar10": datasets.CIFAR10,
+        "cifar100": datasets.CIFAR100,
+    }[id]
+    train_data = dataset_class("datasets", train=True, download=download, transform=transform)
+    test_data = dataset_class("datasets", train=False, download=download, transform=transform)
     train_loader = torch.utils.data.DataLoader(
-        data_d_train.get(id), batch_size=batch_size, shuffle=shuffle
+        train_data, batch_size=batch_size, shuffle=shuffle
     )
-
     test_loader = torch.utils.data.DataLoader(
-        data_d_test.get(id), batch_size=batch_size, shuffle=shuffle
+        test_data, batch_size=batch_size, shuffle=False
     )
     return train_loader, test_loader
 
@@ -200,7 +183,6 @@ def train(model, epoch):
         loss.backward()
         tr_loss += loss.item()
         optimizer.step()
-        progressbar.update()
         if batch_n % args.log_intv == 0:
             print(
                 "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
@@ -239,15 +221,11 @@ if __name__ == "__main__":
         min_test_losses = []
         min_test_losses.append(str(args))
         for i in range(args.runs):
+            torch.manual_seed(args.seed + i)
             test_losses = []
             model.__init__()
             model = model.to(device)
             optimizer = optim.Adam(model.parameters(), lr=0.001)
-            if i == 0:
-                seed = args.seed
-            else:
-                seed += 1
-            torch.manual_seed(seed)
             for e in range(args.epochs):
                 train(model, e)
                 tl = test(model, e)
@@ -261,9 +239,9 @@ if __name__ == "__main__":
             os.mkdir(dirName)
         else:
             pass
-        file_name = dirName + "/{}.xlsx".format(str(datetime.now()))
+        file_name = dirName + "/{}.csv".format(str(datetime.now()))
         file_name = file_name.replace(":", "-")
-        Series.to_excel(file_name, index=False, header=None)
+        Series.to_csv(file_name, index=False, header=None)
     else:
         for e in range(args.epochs):
             train(model, e)

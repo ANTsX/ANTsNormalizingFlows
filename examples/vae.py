@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from torchvision import datasets, transforms
 from tqdm import tqdm
 from antsnormflows.flows import Planar, Radial, MaskedAffineFlow, BatchNorm
+import copy
 import argparse
 from datetime import datetime
 import os
@@ -54,10 +55,10 @@ parser.add_argument(
     help="Dataset to train and test on (mnist, cifar10 or cifar100) (default: mnist)",
 )
 parser.add_argument(
-    "--no-cuda", action="store_true", default=False, help="enables CUDA training"
+    "--no-cuda", action="store_true", default=False, help="disable CUDA training"
 )
 parser.add_argument(
-    "--seed", type=int, default=15, metavar="S", help="Random Seed (default: 1)"
+    "--seed", type=int, default=15, metavar="S", help="Random Seed (default: 15)"
 )
 parser.add_argument(
     "--log-intv",
@@ -68,9 +69,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--experiment_mode",
-    type=bool,
-    default=False,
-    metavar="N",
+    action="store_true",
     help="Experiment mode (conducts 10 runs and saves results as DataFrame (default: False)",
 )
 parser.add_argument(
@@ -118,7 +117,7 @@ class ColourNormalize:
         self.b = b
 
     def __call__(self, x):
-        return (self.b - self.a) * x / 255 + self.a
+        return (self.b - self.a) * x + self.a
 
 
 if args.dataset == "mnist":
@@ -152,43 +151,19 @@ def flow_vae_datasets(
     transform=dtf,
     patch_size=None,
 ):
-    data_d_train = {
-        "mnist": datasets.MNIST(
-            "datasets", train=True, download=True, transform=transform
-        ),
-        "cifar10": datasets.CIFAR10(
-            "datasets", train=True, download=True, transform=transform
-        ),
-        "cifar100": datasets.CIFAR100(
-            "datasets", train=True, download=True, transform=transform
-        ),
-    }
-    data_d_test = {
-        "mnist": datasets.MNIST(
-            "datasets", train=False, download=True, transform=transform
-        ),
-        "cifar10": datasets.CIFAR10(
-            "datasets", train=False, download=True, transform=transform
-        ),
-        "cifar100": datasets.CIFAR100(
-            "datasets", train=False, download=True, transform=transform
-        ),
-    }
-
-    # training_data = data_d_train.get(id)
-    # test_data = data_d_test.get(id)
-    # if patch_size is not None:
-    # training_data.data = np.stack(
-    # [extract_cifar_patch(training_data.data[i, :, :], patch_size) for i in range(len(training_data.data))])
-    # test_data.data = np.stack(
-    # [extract_cifar_patch(test_data.data[i, :, :], patch_size) for i in range(len(test_data.data))])
-
+    # Construct only the requested dataset; do not download all three.
+    dataset_class = {
+        "mnist": datasets.MNIST,
+        "cifar10": datasets.CIFAR10,
+        "cifar100": datasets.CIFAR100,
+    }[id]
+    train_data = dataset_class("datasets", train=True, download=download, transform=transform)
+    test_data = dataset_class("datasets", train=False, download=download, transform=transform)
     train_loader = torch.utils.data.DataLoader(
-        data_d_train.get(id), batch_size=batch_size, shuffle=shuffle
+        train_data, batch_size=batch_size, shuffle=shuffle
     )
-
     test_loader = torch.utils.data.DataLoader(
-        data_d_test.get(id), batch_size=batch_size, shuffle=shuffle
+        test_data, batch_size=batch_size, shuffle=False
     )
     return train_loader, test_loader
 
@@ -226,7 +201,6 @@ class FlowVAE(nn.Module):
 
         # Flow transforms
         z_, log_det = self.flows(z_0)
-        z_ = z_.squeeze()
 
         # Q0 and prior
         q0 = Normal(mu, torch.exp((0.5 * log_var)))
@@ -265,7 +239,7 @@ def bound(rce, x, kld, beta):
         )
     elif args.dataset == "cifar10" or args.dataset == "cifar100":
         # return (- torch.distributions.Normal(x.view(-1, img_dim ** 2), 1.).log_prob(rce)).sum() + beta * kld
-        return F.mse_loss(rce, x, reduction="sum") + beta * kld
+        return F.mse_loss(rce, x.view(-1, img_dim**2), reduction="sum") + beta * kld
 
 
 if args.flow == "Planar":
@@ -281,11 +255,16 @@ elif args.flow == "RealNVP":
         if i % 2 == 0:
             flows += [MaskedAffineFlow(b, t, s)]
         else:
-            flows += [MaskedAffineFlow(1 - b, t, s), BatchNorm()]
-    flows = SimpleFlowModel(
-        flows[:-1]
-    )  # Remove last Batch Norm layer to allow arbitrary output
+            flows += [MaskedAffineFlow(1 - b, t, s)]
+            if i < args.K - 1:
+                flows += [BatchNorm()]
+    flows = SimpleFlowModel(flows)
 
+else:
+    raise ValueError("Choose --flow Planar, Radial, or RealNVP")
+
+# Preserve an untrained template so repeated runs do not reuse learned flows.
+initial_flows = copy.deepcopy(flows)
 model = FlowVAE(flows).to(device)
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 # train_losses = []
@@ -307,7 +286,6 @@ def train(model, epoch, beta):
         loss.backward()
         tr_loss += loss.item()
         optimizer.step()
-        progressbar.update()
         if batch_n % args.log_intv == 0:
             print(
                 "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
@@ -355,15 +333,11 @@ if __name__ == "__main__":
         min_test_losses = []
         min_test_losses.append(str(args))
         for i in range(args.runs):
+            torch.manual_seed(args.seed + i)
             test_losses = []
-            model.__init__(flows)
+            model = FlowVAE(copy.deepcopy(initial_flows))
             model = model.to(device)
             optimizer = optim.Adam(model.parameters(), lr=0.001)
-            if i == 0:
-                seed = args.seed
-            else:
-                seed += 1
-            torch.manual_seed(seed)
             for e in [i + 1 for i in range(args.epochs)]:
                 beta = anneal(e, args.epochs)
                 train(model, e, beta)
@@ -378,9 +352,9 @@ if __name__ == "__main__":
             os.mkdir(dirName)
         else:
             pass
-        file_name = dirName + "/{}.xlsx".format(str(datetime.now()))
+        file_name = dirName + "/{}.csv".format(str(datetime.now()))
         file_name = file_name.replace(":", "-")
-        Series.to_excel(file_name, index=False, header=None)
+        Series.to_csv(file_name, index=False, header=None)
     else:
         for e in [i + 1 for i in range(args.epochs)]:
             beta = anneal(e, args.epochs)
