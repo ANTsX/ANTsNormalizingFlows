@@ -7,6 +7,27 @@ from ..mixing import Invertible1x1Conv, Invertible1x1Conv1d, Invertible1x1x1Conv
 from ..normalization import ActNorm
 from ... import nets
 
+
+@torch.no_grad()
+def _identity_init_temporal_convs(net):
+    """Start every purely temporal hidden convolution of a ConvNet3d as a per-frame identity.
+
+    Targets Conv3d layers with kernel (k, 1, 1), k > 1 and equal input/output channels: weights are zeroed,
+    the centre tap is set to the identity map between channels, and the bias is zeroed. Other layers
+    (spatial convolutions, the zero-initialised last layer) are left untouched.
+    """
+    for m in net.modules():
+        if not isinstance(m, nn.Conv3d):
+            continue
+        k = tuple(m.kernel_size)
+        if k[0] > 1 and k[1] == 1 and k[2] == 1 and m.in_channels == m.out_channels:
+            m.weight.zero_()
+            idx = torch.arange(m.out_channels)
+            m.weight[idx, idx, k[0] // 2, 0, 0] = 1.0
+            if m.bias is not None:
+                m.bias.zero_()
+
+
 class GlowBlock2d(Flow):
     """Glow: Generative Flow with Invertible 1×1 Convolutions, [arXiv: 1807.03039]"""
 
@@ -150,6 +171,8 @@ class GlowBlock3d(Flow):
         actnorm_s_cap=None,
         gen_clamp=1.0e4,
         shift_cap=None,
+        kernel_size=None,
+        temporal_init="default",
     ):
         """Constructor
 
@@ -163,6 +186,17 @@ class GlowBlock3d(Flow):
           init_zeros: Flag whether to initialize last conv layer with zeros
           use_lu: Flag whether to parametrize weights through the LU decomposition in invertible 1x1 convolution layers
           logscale_factor: Factor which can be used to control the scale of the log scale factor, see [source](https://github.com/openai/glow)
+          kernel_size: optional kernel sizes of the three convolutions of the coupling network
+            (first, middle, last). Each entry is an int (isotropic, e.g. the default ``(3, 1, 3)`` =
+            3x3x3, 1x1x1, 3x3x3) or a 3-sequence with one odd size per axis. For data whose first
+            spatial axis is time, ``((1, 3, 3), (3, 1, 1), (1, 3, 3))`` gives a (2+1)D coupling network:
+            spatial 3x3, then a temporal convolution, then spatial 3x3. None (default) keeps the
+            historical isotropic kernels, so existing checkpoints and configurations are unaffected.
+          temporal_init: "default" (PyTorch initialization) or "identity". With "identity", every
+            hidden convolution whose kernel is purely temporal ((k, 1, 1) with k > 1, equal input and
+            output channels) starts as a per-frame identity (zero weights except the centre tap), so
+            the coupling network initially treats frames independently and learns temporal
+            dependencies as a perturbation. Has no effect without such a convolution.
           conv_s_cap: optional override for the Invertible1x1x1Conv's own log-scale
             clamp. If None (default), the conv uses `s_cap`. Pass an explicit
             value (e.g. 2.5) to reproduce the pre-fix behavior for checkpoints
@@ -198,7 +232,14 @@ class GlowBlock3d(Flow):
         super().__init__()
         self.flows = nn.ModuleList([])
         # Coupling layer
-        kernel_size = (3, 1, 3)
+        if kernel_size is None:
+            kernel_size = (3, 1, 3)
+        elif len(kernel_size) != 3:
+            raise ValueError(
+                f"GlowBlock3d: kernel_size needs 3 entries (first, middle, last conv), got {kernel_size!r}."
+            )
+        if temporal_init not in ("default", "identity"):
+            raise ValueError(f"GlowBlock3d: temporal_init must be 'default' or 'identity', got {temporal_init!r}.")
         num_param = 2 if scale else 1
         if "channel" == split_mode:
             channels_ = ((channels + 1) // 2,) + 3 * (hidden_channels,)
@@ -214,6 +255,8 @@ class GlowBlock3d(Flow):
         param_map = nets.ConvNet3d(
             channels_, kernel_size, leaky, init_zeros, actnorm=net_actnorm
         )
+        if temporal_init == "identity":
+            _identity_init_temporal_convs(param_map)
 
         # Bind this ActNorm's log-scale clamp to the caller's requested
         # scale_cap instead of silently using ActNorm's own hardcoded
