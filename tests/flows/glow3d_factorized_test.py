@@ -123,8 +123,9 @@ class GlowBlock3dFactorizedTest(unittest.TestCase):
             x = torch.randn(1, 4, 2, 3, 3, generator=g, dtype=torch.double)
             with torch.no_grad():
                 block(x)                                       # data-dependent ActNorm initialization
-            z, ld = block(x)
-            back, ld_inv = block.inverse(z)
+            with torch.no_grad():
+                z, ld = block(x)
+                back, ld_inv = block.inverse(z)
             self.assertLess(float((back - x).abs().max()), 1e-9, kw)
             self.assertLess(float((ld + ld_inv).abs().max()), 1e-9, kw)
 
