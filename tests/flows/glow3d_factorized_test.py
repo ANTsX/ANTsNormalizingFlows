@@ -149,7 +149,7 @@ class GlowBlock3dFactorizedTest(unittest.TestCase):
         self.assertTrue(torch.equal(w, expected))
         # spatial convs and the zero-initialised last layer are untouched
         self.assertTrue(torch.all(convs[2].weight == 0))
-        self.assertGreater(float(convs[0].weight.abs().sum()), 0.0)
+        self.assertGreater(float(convs[0].weight.detach().abs().sum()), 0.0)
         # default initialization leaves the temporal conv alone
         plain = GlowBlock3d(8, 6, kernel_size=FACTORIZED)
         self.assertFalse(torch.equal(w, [m for m in plain.modules() if isinstance(m, torch.nn.Conv3d)][1].weight.detach()))
