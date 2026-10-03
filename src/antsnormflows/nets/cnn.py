@@ -53,9 +53,30 @@ class ConvNet2d(nn.Module):
         return x
 
 
+def _as_kernel_3d(k):
+    """Kernel entry of ConvNet3d: an int (isotropic, as before) or a 3-sequence (one size per axis)."""
+    if isinstance(k, int):
+        return k
+    k = tuple(int(v) for v in k)
+    if len(k) != 3:
+        raise ValueError(f"A 3D kernel needs 3 sizes (one per axis), got {k}.")
+    if any(v % 2 == 0 for v in k):
+        raise ValueError(f"Per-axis kernel sizes must be odd to keep the shape ('same' padding), got {k}.")
+    return k
+
+
+def _same_padding_3d(k):
+    """'same' padding of a kernel entry. Ints keep the historical behavior (k // 2)."""
+    return k // 2 if isinstance(k, int) else tuple(v // 2 for v in k)
+
+
 class ConvNet3d(nn.Module):
     """
     3D Convolutional Neural Network with leaky ReLU nonlinearities
+
+    Each entry of ``kernel_size`` is either an int (isotropic kernel, the historical behavior) or a
+    3-sequence with one odd size per axis, e.g. ``(1, 3, 3)`` for a purely spatial kernel or ``(3, 1, 1)``
+    for a purely temporal one when the first spatial axis is time.
     """
 
     def __init__(
@@ -68,13 +89,14 @@ class ConvNet3d(nn.Module):
         weight_std=None,
     ):
         super().__init__()
+        kernel_size = [_as_kernel_3d(k) for k in kernel_size]
         net = nn.ModuleList([])
         for i in range(len(kernel_size) - 1):
             conv = nn.Conv3d(
                 channels[i],
                 channels[i + 1],
                 kernel_size[i],
-                padding=kernel_size[i] // 2,
+                padding=_same_padding_3d(kernel_size[i]),
                 bias=(not actnorm),
             )
             if weight_std is not None:
@@ -90,7 +112,7 @@ class ConvNet3d(nn.Module):
                 channels[-2],
                 channels[-1],
                 kernel_size[-1],
-                padding=kernel_size[-1] // 2,
+                padding=_same_padding_3d(kernel_size[-1]),
             )
         )
         if init_zeros:
