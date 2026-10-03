@@ -6,7 +6,6 @@ An updated PyTorch package (from
 [normflows](https://github.com/VincentStimper/normalizing-flows)) for discrete normalizing
 flows.
 
-<!--
 ## Installation
 
 Requires Python ≥ 3.10 and a working PyTorch installation (GPU optional).
@@ -18,14 +17,14 @@ pip install -e .
 To run example notebooks:
 
 ```bash
-pip install -e .[examples]
+pip install -e '.[examples]'
 ```
 
--->
 
 ## Quick start
 
 ```python
+import torch
 import antsnormflows as nf
 
 # Base distribution (2D diagonal Gaussian)
@@ -40,12 +39,15 @@ for _ in range(num_layers):
     flows.append(nf.flows.Permute(2, mode="swap"))
 
 model = nf.NormalizingFlow(base, flows)
-loss = model.forward_kld(x)  # x: (batch, 2)
+x = torch.randn(128, 2)  # Replace with a batch of your observations.
+loss = model.forward_kld(x)
 loss.backward()
 ```
 
 ## Documentation
 
+* [ANTsNormalizingFlows documentation](https://antsnormalizingflows.readthedocs.io/en/latest/)
+* [Installation and complete training tutorial](https://antsnormalizingflows.readthedocs.io/en/latest/getting_started.html)
 * [Original documentation](https://vincentstimper.github.io/normalizing-flows/)
 
 ## Citation

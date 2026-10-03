@@ -9,31 +9,24 @@ flows, based on the `normflows project
    :alt: Test coverage
    :target: https://github.com/ANTsX/ANTsNormalizingFlows/actions/workflows/pytest.yaml
 
-Quick start
------------
+Start here
+----------
 
-.. code-block:: python
-
-   import antsnormflows as nf
-
-   base = nf.distributions.base.DiagGaussian(2)
-
-   flows = []
-   for _ in range(8):
-       param_map = nf.nets.MLP([1, 64, 64, 2], init_zeros=True)
-       flows.append(nf.flows.AffineCouplingBlock(param_map))
-       flows.append(nf.flows.Permute(2, mode="swap"))
-
-   model = nf.NormalizingFlow(base, flows)
-   loss = model.forward_kld(x)
-   loss.backward()
+Follow :doc:`installation`, then run :doc:`getting_started` to train a Real
+NVP model on synthetic data. The :doc:`training` guide explains objectives,
+tensor shapes, model conventions, and checkpointing. Browse :doc:`examples`
+for larger experiments and :doc:`api` for class and method details.
 
 .. toctree::
    :maxdepth: 2
    :caption: Contents
 
-   api
+   installation
+   getting_started
+   training
    examples
+   api
+   development
 
 
 Citations
