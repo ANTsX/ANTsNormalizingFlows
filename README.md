@@ -48,7 +48,6 @@ loss.backward()
 
 * [ANTsNormalizingFlows documentation](https://antsnormalizingflows.readthedocs.io/en/latest/)
 * [Installation and complete training tutorial](https://antsnormalizingflows.readthedocs.io/en/latest/getting_started.html)
-* [Original documentation](https://vincentstimper.github.io/normalizing-flows/)
 
 ## Citation
 
