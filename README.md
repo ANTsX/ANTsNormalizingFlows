@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/figures/antsnormalizingflows-banner.png" alt="ANTsNormalizingFlows — conceptual illustration of a Gaussian point cloud, deformation mesh, tabular data, a time series, a brain, and lungs" width="100%" />
+<img src="docs/figures/antsnormalizingflows-banner.png" alt="ANTsNormalizingFlows — conceptual illustration of a Gaussian point cloud, deformation mesh, tabular data, a time series, a brain, a heart, and lungs" width="100%" />
 
 <!-- AI-generated conceptual artwork; not an ANTsNormalizingFlows inference result. -->
 
