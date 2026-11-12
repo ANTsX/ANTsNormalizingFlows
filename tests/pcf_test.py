@@ -208,5 +208,14 @@ class GenericPCFPenaltyTest(unittest.TestCase):
         assert len(z) == 1 and s[0].shape == (4, 3) and (s[0] > 0).all()
 
 
+    def test_level_sampling_is_unbiased(self):
+        model = _glow2d().double().eval()
+        x = torch.randn(1, 2, 4, 4, dtype=torch.float64)
+        exact = pcf_penalty(model, x, num_dims=10 ** 6)
+        draws = torch.stack([pcf_penalty(model, x, num_dims=10 ** 6, num_levels=1) for _ in range(2000)]).squeeze(1)
+        assert abs(draws.mean() - exact[0]) < 4 * draws.std() / draws.numel() ** 0.5
+        assert_close(pcf_penalty(model, x, num_dims=10 ** 6, num_levels=5), exact)   # >= levels: all
+
+
 if __name__ == "__main__":
     unittest.main()

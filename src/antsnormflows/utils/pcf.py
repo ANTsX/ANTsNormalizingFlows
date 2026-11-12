@@ -26,7 +26,8 @@ def _batch_coupling_modules(model: nn.Module):
 
 def pcf_penalty(model: nn.Module, x: torch.Tensor, num_dims: int = 1,
                 context: Optional[torch.Tensor] = None,
-                create_graph: Optional[bool] = None) -> torch.Tensor:
+                create_graph: Optional[bool] = None,
+                num_levels: Optional[int] = None) -> torch.Tensor:
     """Principal component flow penalty -I_hat(x) >= 0, estimated stochastically.
 
     With the latent space partitioned into single coordinates, the surrogate of
@@ -64,6 +65,10 @@ def pcf_penalty(model: nn.Module, x: torch.Tensor, num_dims: int = 1,
       create_graph: Keep the graph of the vector-Jacobian products so that the
         penalty can be differentiated with respect to the parameters (double
         backward). Defaults to ``model.training``.
+      num_levels: For multiscale latents, number of levels drawn at random per
+        call (their row terms weighted by levels / num_levels, still unbiased);
+        None or >= the number of levels uses every level. Fewer levels means
+        fewer vector-Jacobian products, hence less memory and time.
 
     Returns:
       Penalty -I_hat for each batch element (shape (batch,)), >= 0 up to Monte
@@ -84,11 +89,13 @@ def pcf_penalty(model: nn.Module, x: torch.Tensor, num_dims: int = 1,
         z, log_det = model.inverse_and_log_det(x)
     else:
         z, log_det = model.inverse_and_log_det(x, context=context)
-    return pcf_penalty_from_latents(x, z, log_det, num_dims=num_dims, create_graph=create_graph)
+    return pcf_penalty_from_latents(x, z, log_det, num_dims=num_dims, create_graph=create_graph,
+                                    num_levels=num_levels)
 
 
 def pcf_penalty_from_latents(x: torch.Tensor, z, log_det: torch.Tensor, num_dims: int = 1,
-                             create_graph: bool = True) -> torch.Tensor:
+                             create_graph: bool = True,
+                             num_levels: Optional[int] = None) -> torch.Tensor:
     """PCF penalty from an encoding that has already been computed.
 
     Same estimator as `pcf_penalty`, for callers that already ran
@@ -104,6 +111,7 @@ def pcf_penalty_from_latents(x: torch.Tensor, z, log_det: torch.Tensor, num_dims
       log_det: log|det dz/dx| for each batch element
       num_dims: Latent coordinates sampled per level and per batch element
       create_graph: Keep the graph for differentiation with respect to the parameters
+      num_levels: Levels drawn at random (see `pcf_penalty`); None uses every level
 
     Returns:
       Penalty -I_hat for each batch element (shape (batch,))
@@ -114,6 +122,11 @@ def pcf_penalty_from_latents(x: torch.Tensor, z, log_det: torch.Tensor, num_dims
     if not x.requires_grad:
         raise ValueError("pcf_penalty_from_latents: x must require grad and be the input z was computed from.")
     levels = z if isinstance(z, (list, tuple)) else [z]
+    level_weight = 1.0
+    if num_levels is not None and 0 < num_levels < len(levels):
+        chosen = torch.randperm(len(levels))[:num_levels].tolist()
+        level_weight = len(levels) / num_levels
+        levels = [levels[i] for i in sorted(chosen)]
     batch_size = x.shape[0]
     accum_dtype = stable_fp_dtype(x)
     rows = torch.arange(batch_size, device=x.device)
@@ -123,7 +136,7 @@ def pcf_penalty_from_latents(x: torch.Tensor, z, log_det: torch.Tensor, num_dims
         size = z_flat.shape[1]
         exact = num_dims >= size
         n_draws = size if exact else num_dims
-        weight = 1.0 if exact else size / num_dims
+        weight = level_weight * (1.0 if exact else size / num_dims)
         for draw in range(n_draws):
             if exact:
                 idx = torch.full((batch_size,), draw, device=x.device, dtype=torch.long)
