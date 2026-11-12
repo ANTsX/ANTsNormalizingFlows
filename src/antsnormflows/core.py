@@ -854,34 +854,11 @@ class MultiscaleFlow(nn.Module):
         Returns:
           Penalty -I_hat for each batch element (shape (batch,)), >= 0 up to
           Monte Carlo error
+
+        See `antsnormflows.utils.pcf_penalty`, which this method calls and
+        which also serves the other flow classes.
         """
-        if num_dims < 1:
-            raise ValueError(f"pcf_regularizer: num_dims must be >= 1, got {num_dims}.")
-        if create_graph is None:
-            create_graph = self.training
-        x = x.detach().requires_grad_(True)
-        z, log_det = self.inverse_and_log_det(x)
-        batch_size = x.shape[0]
-        accum_dtype = stable_fp_dtype(x)
-        row_log_norms = torch.zeros(batch_size, dtype=accum_dtype, device=x.device)
-        for z_level in z:
-            z_flat = z_level.reshape(batch_size, -1)
-            size = z_flat.shape[1]
-            exact = num_dims >= size
-            n_draws = size if exact else num_dims
-            for draw in range(n_draws):
-                if exact:
-                    idx = torch.full((batch_size,), draw, device=x.device, dtype=torch.long)
-                else:
-                    idx = torch.randint(size, (batch_size,), device=x.device)
-                selector = torch.zeros_like(z_flat)
-                selector[torch.arange(batch_size, device=x.device), idx] = 1.0
-                row = torch.autograd.grad(z_flat, x, grad_outputs=selector,
-                                          create_graph=create_graph, retain_graph=True)[0]
-                row_norm = row.reshape(batch_size, -1).to(accum_dtype).norm(dim=1)
-                weight = 1.0 if exact else size / num_dims
-                row_log_norms = row_log_norms + weight * torch.log(row_norm.clamp_min(1e-30))
-        return row_log_norms - log_det.to(accum_dtype)
+        return utils.pcf_penalty(self, x, num_dims=num_dims, create_graph=create_graph)
 
     def save(self, path: str) -> None:
         """Save state dict of model
