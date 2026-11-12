@@ -8,7 +8,7 @@ from antsnormflows.flows import GlowBlock2d, Merge, Squeeze2d, Invertible1x1Conv
     MaskedAffineAutoregressive, BatchNorm
 from antsnormflows.nets import MLP
 from antsnormflows.distributions.base import DiagGaussian
-from antsnormflows.utils import pcf_penalty, pcf_penalty_from_latents
+from antsnormflows.utils import latent_stretch, pcf_penalty, pcf_penalty_from_latents
 
 
 def _glow2d(num_levels=2, num_blocks=2, input_shape=(2, 4, 4), hidden=8, grad_checkpoint=None):
@@ -185,6 +185,27 @@ class GenericPCFPenaltyTest(unittest.TestCase):
         z0, ld0 = model.inverse_and_log_det(x0)
         with self.assertRaises(ValueError):
             pcf_penalty_from_latents(x0, z0, ld0)
+
+
+    def test_latent_stretch_matches_jacobian_rows(self):
+        model = _glow2d().double().eval()
+        x = torch.randn(2, 2, 4, 4, dtype=torch.float64)
+        z, stretch = latent_stretch(model, x, num_probes=6000)
+        assert [s.shape for s in stretch] == [zl.reshape(2, -1).shape for zl in z]
+        for i in range(2):
+            J = torch.autograd.functional.jacobian(
+                lambda v: torch.cat([zl.reshape(-1) for zl in model.inverse_and_log_det(v.unsqueeze(0))[0]]), x[i])
+            exact = 1.0 / J.reshape(-1, x[i].numel()).norm(dim=1)
+            est = torch.cat([s[i] for s in stretch])
+            assert ((est / exact - 1).abs().median() < 0.03) and ((est / exact - 1).abs().max() < 0.15)
+
+    def test_latent_stretch_on_conditional_flow(self):
+        layers = [MaskedAffineAutoregressive(features=3, hidden_features=16, context_features=2, num_blocks=1,
+                                             random_mask=False) for _ in range(2)]
+        model = ConditionalNormalizingFlow(DiagGaussian(3), layers).double().eval()
+        z, s = latent_stretch(model, torch.randn(4, 3, dtype=torch.float64), num_probes=8,
+                              context=torch.randn(4, 2, dtype=torch.float64))
+        assert len(z) == 1 and s[0].shape == (4, 3) and (s[0] > 0).all()
 
 
 if __name__ == "__main__":

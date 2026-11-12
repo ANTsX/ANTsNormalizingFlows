@@ -136,3 +136,62 @@ def pcf_penalty_from_latents(x: torch.Tensor, z, log_det: torch.Tensor, num_dims
             row_norm = row.reshape(batch_size, -1).to(accum_dtype).norm(dim=1)
             total = total + weight * torch.log(row_norm.clamp_min(1e-30))
     return total - log_det.to(accum_dtype)
+
+
+def latent_stretch(model: nn.Module, x: torch.Tensor, num_probes: int = 64,
+                   context: Optional[torch.Tensor] = None, eps: float = 1e-12):
+    """Image-space stretch of every latent coordinate, by Hutchinson diagonal estimation.
+
+    For the encoder Jacobian G = dz/dx with rows g_k = dz_k/dx, a random
+    Rademacher probe v in data space gives E[(G v)_k^2] = ||g_k||^2 for every k
+    at once. Averaging over ``num_probes`` probes estimates all row norms with
+    one Jacobian-vector product per probe (computed as a double vector-Jacobian
+    product, so any flow with ``inverse_and_log_det`` works).
+
+    When the rows are orthogonal (the goal of the principal component flow
+    penalty), the decoder column dx/dz_k equals g_k / ||g_k||^2, so its norm,
+    the image-space stretch of coordinate k, is 1 / ||g_k||. Ranking latent
+    coordinates by their stretch averaged over a population gives the flow's
+    principal ordering (the latent variances themselves are ~1 after whitening
+    and carry no ordering). Without the penalty the stretch is only an
+    approximation of the column norm.
+
+    Args:
+      model: Flow with ``inverse_and_log_det``
+      x: Batch of data
+      num_probes: Number of Rademacher probes (relative error ~ sqrt(2 / num_probes))
+      context: Conditioning tensor for conditional flows
+      eps: Floor on the squared row norm
+
+    Returns:
+      (z, stretch): the latents (list, one tensor per level, detached) and, for
+      each level, a tensor (batch, level size) of estimated stretches 1/||g_k||
+    """
+    if num_probes < 1:
+        raise ValueError(f"latent_stretch: num_probes must be >= 1, got {num_probes}.")
+    coupled = _batch_coupling_modules(model)
+    if coupled:
+        raise ValueError(f"latent_stretch: layers using batch statistics in training mode: {coupled}.")
+    x = x.detach().requires_grad_(True)
+    if context is None:
+        z, _ = model.inverse_and_log_det(x)
+    else:
+        z, _ = model.inverse_and_log_det(x, context=context)
+    levels = z if isinstance(z, (list, tuple)) else [z]
+    batch_size = x.shape[0]
+    sizes = [zl[0].numel() for zl in levels]
+    z_flat = torch.cat([zl.reshape(batch_size, -1) for zl in levels], dim=1)
+    u = torch.zeros_like(z_flat, requires_grad=True)
+    gt_u = torch.autograd.grad(z_flat, x, grad_outputs=u, create_graph=True)[0]   # G^T u, linear in u
+    sq = torch.zeros_like(z_flat, dtype=torch.float64)
+    for _ in range(num_probes):
+        v = torch.randint(0, 2, x.shape, device=x.device).to(x.dtype) * 2 - 1
+        gv = torch.autograd.grad(gt_u, u, grad_outputs=v, retain_graph=True)[0]  # G v
+        sq += gv.detach().double() ** 2
+    stretch = (sq / num_probes).clamp_min(eps).rsqrt().to(x.dtype)
+    out_z, out_s, start = [], [], 0
+    for zl, n in zip(levels, sizes):
+        out_z.append(zl.detach())
+        out_s.append(stretch[:, start:start + n])
+        start += n
+    return out_z, out_s
