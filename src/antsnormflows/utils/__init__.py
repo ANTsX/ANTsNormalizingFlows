@@ -22,4 +22,4 @@ from .optim import (
 
 from .preprocessing import Logit, Jitter, Scale
 
-from .pcf import pcf_penalty
+from .pcf import pcf_penalty, pcf_penalty_from_latents

@@ -69,7 +69,6 @@ def pcf_penalty(model: nn.Module, x: torch.Tensor, num_dims: int = 1,
       Penalty -I_hat for each batch element (shape (batch,)), >= 0 up to Monte
       Carlo error
     """
-    from ..flows.base import stable_fp_dtype
     if num_dims < 1:
         raise ValueError(f"pcf_penalty: num_dims must be >= 1, got {num_dims}.")
     coupled = _batch_coupling_modules(model)
@@ -85,6 +84,35 @@ def pcf_penalty(model: nn.Module, x: torch.Tensor, num_dims: int = 1,
         z, log_det = model.inverse_and_log_det(x)
     else:
         z, log_det = model.inverse_and_log_det(x, context=context)
+    return pcf_penalty_from_latents(x, z, log_det, num_dims=num_dims, create_graph=create_graph)
+
+
+def pcf_penalty_from_latents(x: torch.Tensor, z, log_det: torch.Tensor, num_dims: int = 1,
+                             create_graph: bool = True) -> torch.Tensor:
+    """PCF penalty from an encoding that has already been computed.
+
+    Same estimator as `pcf_penalty`, for callers that already ran
+    ``z, log_det = model.inverse_and_log_det(x)`` with ``x.requires_grad`` set
+    (e.g. inside a training forward pass, so that the likelihood and the
+    penalty share one encoder pass, or inside a DistributedDataParallel
+    forward so that gradient synchronization covers the penalty). The flow
+    must treat the samples of the batch independently (see `pcf_penalty`).
+
+    Args:
+      x: Input batch, the leaf (requires_grad=True) the encoding was computed from
+      z: Latent tensor, or list of latent tensors (one per level)
+      log_det: log|det dz/dx| for each batch element
+      num_dims: Latent coordinates sampled per level and per batch element
+      create_graph: Keep the graph for differentiation with respect to the parameters
+
+    Returns:
+      Penalty -I_hat for each batch element (shape (batch,))
+    """
+    from ..flows.base import stable_fp_dtype
+    if num_dims < 1:
+        raise ValueError(f"pcf_penalty_from_latents: num_dims must be >= 1, got {num_dims}.")
+    if not x.requires_grad:
+        raise ValueError("pcf_penalty_from_latents: x must require grad and be the input z was computed from.")
     levels = z if isinstance(z, (list, tuple)) else [z]
     batch_size = x.shape[0]
     accum_dtype = stable_fp_dtype(x)

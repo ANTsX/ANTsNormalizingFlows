@@ -8,7 +8,7 @@ from antsnormflows.flows import GlowBlock2d, Merge, Squeeze2d, Invertible1x1Conv
     MaskedAffineAutoregressive, BatchNorm
 from antsnormflows.nets import MLP
 from antsnormflows.distributions.base import DiagGaussian
-from antsnormflows.utils import pcf_penalty
+from antsnormflows.utils import pcf_penalty, pcf_penalty_from_latents
 
 
 def _glow2d(num_levels=2, num_blocks=2, input_shape=(2, 4, 4), hidden=8, grad_checkpoint=None):
@@ -173,6 +173,18 @@ class GenericPCFPenaltyTest(unittest.TestCase):
         loss = (-model.log_prob(x) + 0.5 * pcf_penalty(model, x, num_dims=4)).mean()
         loss.backward()
         assert all(torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None)
+
+
+    def test_from_latents_matches_and_requires_grad(self):
+        model = _glow2d().double().eval()
+        x = torch.randn(2, 2, 4, 4, dtype=torch.float64).requires_grad_(True)
+        z, log_det = model.inverse_and_log_det(x)
+        assert_close(pcf_penalty_from_latents(x, z, log_det, num_dims=10 ** 6),
+                     pcf_penalty(model, x, num_dims=10 ** 6))
+        x0 = torch.randn(2, 2, 4, 4, dtype=torch.float64)
+        z0, ld0 = model.inverse_and_log_det(x0)
+        with self.assertRaises(ValueError):
+            pcf_penalty_from_latents(x0, z0, ld0)
 
 
 if __name__ == "__main__":
