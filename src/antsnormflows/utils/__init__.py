@@ -3,6 +3,7 @@ from . import (
     masks,
     nn,
     optim,
+    pcf,
     preprocessing,
     splines,
 )
@@ -20,3 +21,5 @@ from .optim import (
 )
 
 from .preprocessing import Logit, Jitter, Scale
+
+from .pcf import pcf_penalty

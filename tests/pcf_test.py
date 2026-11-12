@@ -3,9 +3,12 @@ import unittest
 import torch
 from torch.testing import assert_close
 
-from antsnormflows import MultiscaleFlow
-from antsnormflows.flows import GlowBlock2d, Merge, Squeeze2d, Invertible1x1Conv
+from antsnormflows import MultiscaleFlow, NormalizingFlow, ConditionalNormalizingFlow, ConvFlow1d
+from antsnormflows.flows import GlowBlock2d, Merge, Squeeze2d, Invertible1x1Conv, MaskedAffineFlow, \
+    MaskedAffineAutoregressive, BatchNorm
+from antsnormflows.nets import MLP
 from antsnormflows.distributions.base import DiagGaussian
+from antsnormflows.utils import pcf_penalty
 
 
 def _glow2d(num_levels=2, num_blocks=2, input_shape=(2, 4, 4), hidden=8, grad_checkpoint=None):
@@ -88,6 +91,88 @@ class PCFRegularizerTest(unittest.TestCase):
         model = _glow2d().eval()
         with self.assertRaises(ValueError):
             model.pcf_regularizer(torch.randn(2, 2, 4, 4), num_dims=0)
+
+
+def _real_nvp(dim=4, n_layers=4):
+    layers = []
+    for i in range(n_layers):
+        b = torch.tensor([float(j % 2 == i % 2) for j in range(dim)])
+        layers.append(MaskedAffineFlow(b, MLP([dim, 16, dim], init_zeros=False), MLP([dim, 16, dim], init_zeros=False)))
+    return NormalizingFlow(DiagGaussian(dim), layers)
+
+
+def _jacobian_penalty(encode, x):
+    """-I_hat from the full Jacobian of encode (one sample -> flat latent)."""
+    out = []
+    for xi in x:
+        J = torch.autograd.functional.jacobian(encode, xi).reshape(-1, xi.numel())
+        out.append(J.norm(dim=1).log().sum() - torch.linalg.slogdet(J)[1])
+    return torch.stack(out)
+
+
+class GenericPCFPenaltyTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+
+    def test_normalizing_flow_exact(self):
+        model = _real_nvp().double().eval()
+        x = torch.randn(5, 4, dtype=torch.float64)
+        penalty = pcf_penalty(model, x, num_dims=4)
+        expected = _jacobian_penalty(lambda v: model.inverse_and_log_det(v.unsqueeze(0))[0].reshape(-1), x)
+        assert_close(penalty, expected, rtol=1e-6, atol=1e-6)
+        assert (penalty >= -1e-8).all()
+
+    def test_conditional_flow_exact_at_fixed_context(self):
+        layers = [MaskedAffineAutoregressive(features=3, hidden_features=16, context_features=2, num_blocks=1,
+                                             random_mask=False) for _ in range(2)]
+        model = ConditionalNormalizingFlow(DiagGaussian(3), layers).double().eval()
+        x = torch.randn(4, 3, dtype=torch.float64)
+        c = torch.randn(4, 2, dtype=torch.float64)
+        penalty = pcf_penalty(model, x, num_dims=3, context=c)
+        expected = torch.cat([
+            _jacobian_penalty(lambda v, ci=c[i:i + 1]: model.inverse_and_log_det(v.unsqueeze(0), context=ci)[0].reshape(-1),
+                              x[i:i + 1]) for i in range(4)])
+        assert_close(penalty, expected, rtol=1e-6, atol=1e-6)
+
+    def test_conv_flow_1d_exact_and_unbiased(self):
+        model = ConvFlow1d(channels=2, length=8, K=2, hidden_channels=8).double()
+        model.inverse_and_log_det(torch.randn(8, 2, 8, dtype=torch.float64))   # ActNorm initialization
+        with torch.no_grad():                                                  # leave the near-identity init
+            for p in model.parameters():
+                p.add_(0.3 * torch.randn_like(p))
+        model.eval()
+        x = torch.randn(2, 2, 8, dtype=torch.float64)
+        exact = pcf_penalty(model, x, num_dims=10 ** 6)
+        assert (exact > 1e-6).all()                                            # non-trivial penalty
+        expected = _jacobian_penalty(lambda v: model.inverse_and_log_det(v.unsqueeze(0))[0].reshape(-1), x)
+        assert_close(exact, expected, rtol=1e-6, atol=1e-6)
+        draws = torch.stack([pcf_penalty(model, x[:1], num_dims=2) for _ in range(3000)]).squeeze(1)
+        assert abs(draws.mean() - exact[0]) < 4 * draws.std() / draws.numel() ** 0.5
+
+    def test_multiscale_method_delegates(self):
+        model = _glow2d().double().eval()
+        x = torch.randn(2, 2, 4, 4, dtype=torch.float64)
+        assert_close(model.pcf_regularizer(x, num_dims=10 ** 6), pcf_penalty(model, x, num_dims=10 ** 6))
+
+    def test_batch_statistics_rejected_in_training(self):
+        dim = 4
+        coupled = NormalizingFlow(DiagGaussian(dim), [BatchNorm(detach_stats=False), _real_nvp(dim, 2).flows[0]])
+        with self.assertRaises(ValueError):
+            pcf_penalty(coupled.train(), torch.randn(6, dim))
+        pcf_penalty(coupled.eval(), torch.randn(6, dim))                     # eval mode: running statistics
+        detached = NormalizingFlow(DiagGaussian(dim), [BatchNorm(detach_stats=True), _real_nvp(dim, 2).flows[0]])
+        pcf_penalty(detached.train(), torch.randn(6, dim))                   # constants for autograd: allowed
+        mlp_bn = _real_nvp(dim, 2)
+        mlp_bn.flows[0].s.net.insert(1, torch.nn.BatchNorm1d(16))
+        with self.assertRaises(ValueError):
+            pcf_penalty(mlp_bn.train(), torch.randn(6, dim))
+
+    def test_training_gradient_through_penalty(self):
+        model = _real_nvp().train()
+        x = torch.randn(16, 4)
+        loss = (-model.log_prob(x) + 0.5 * pcf_penalty(model, x, num_dims=4)).mean()
+        loss.backward()
+        assert all(torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None)
 
 
 if __name__ == "__main__":
