@@ -196,11 +196,13 @@ def latent_stretch(model: nn.Module, x: torch.Tensor, num_probes: int = 64,
     z_flat = torch.cat([zl.reshape(batch_size, -1) for zl in levels], dim=1)
     u = torch.zeros_like(z_flat, requires_grad=True)
     gt_u = torch.autograd.grad(z_flat, x, grad_outputs=u, create_graph=True)[0]   # G^T u, linear in u
-    sq = torch.zeros_like(z_flat, dtype=torch.float64)
+    # Accumulate in float64 where the backend supports it (MPS has no float64).
+    acc_dtype = torch.float32 if z_flat.device.type == "mps" else torch.float64
+    sq = torch.zeros_like(z_flat, dtype=acc_dtype)
     for _ in range(num_probes):
         v = torch.randint(0, 2, x.shape, device=x.device).to(x.dtype) * 2 - 1
         gv = torch.autograd.grad(gt_u, u, grad_outputs=v, retain_graph=True)[0]  # G v
-        sq += gv.detach().double() ** 2
+        sq += gv.detach().to(acc_dtype) ** 2
     stretch = (sq / num_probes).clamp_min(eps).rsqrt().to(x.dtype)
     out_z, out_s, start = [], [], 0
     for zl, n in zip(levels, sizes):
